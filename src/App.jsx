@@ -21,9 +21,13 @@ export default function App() {
   const [isLoadingData, setIsLoadingData] = useState(false);
   const [dbError, setDbError] = useState(null);
   
-  // VPS State
+  // VPS & Shopify State (UPDATED)
   const [vpsStatus, setVpsStatus] = useState('UNKNOWN');
-  const [shopifyKpi, setShopifyKpi] = useState(0); 
+  const [shopifyStats, setShopifyStats] = useState({
+    totalOrders: 0,
+    totalSales: 0,
+    cancelled: 0
+  });
   const [isToggling, setIsToggling] = useState(false);
   const [isUpdatingCode, setIsUpdatingCode] = useState(false);
 
@@ -66,20 +70,32 @@ export default function App() {
     setSupabase(null);
   };
 
-  // 1. Fetch Master Data & AUTO-SYNC ENGINE
+  // 1. Fetch Master Data & AUTO-SYNC ENGINE (UPDATED FOR NEW COLUMNS)
   useEffect(() => {
     if (!supabase) return;
+
+    const fetchFleetData = async () => {
+      const { data: vpsData } = await supabase
+        .from('fleet_command')
+        .select('bot_status, daily_shopify_kpi, daily_shopify_sales, daily_shopify_cancelled')
+        .eq('id', 1)
+        .single();
+      
+      if (vpsData) {
+        setVpsStatus(vpsData.bot_status);
+        setShopifyStats({
+          totalOrders: vpsData.daily_shopify_kpi || 0,
+          totalSales: vpsData.daily_shopify_sales || 0,
+          cancelled: vpsData.daily_shopify_cancelled || 0
+        });
+      }
+    };
 
     const bootSystem = async () => {
       setIsLoadingData(true);
       const { data: orderData } = await supabase.from('orders').select('*').order('id', { ascending: false }).limit(3000);
       if (orderData) setOrders(orderData);
-
-      const { data: vpsData } = await supabase.from('fleet_command').select('bot_status, daily_shopify_kpi').eq('id', 1).single();
-      if (vpsData) {
-        setVpsStatus(vpsData.bot_status);
-        setShopifyKpi(vpsData.daily_shopify_kpi || 0);
-      }
+      await fetchFleetData();
       setIsLoadingData(false);
     };
 
@@ -88,12 +104,7 @@ export default function App() {
     const syncLogsAndOrders = async () => {
       const { data: logData } = await supabase.from('cloud_logs').select('*').order('id', { ascending: false }).limit(50);
       if (logData) setCloudLogs(logData);
-      
-      const { data: vpsData } = await supabase.from('fleet_command').select('bot_status, daily_shopify_kpi').eq('id', 1).single();
-      if (vpsData) {
-        setVpsStatus(vpsData.bot_status);
-        setShopifyKpi(vpsData.daily_shopify_kpi || 0);
-      }
+      await fetchFleetData();
     };
     
     syncLogsAndOrders(); 
@@ -105,9 +116,7 @@ export default function App() {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatHistory, isOracleThinking]);
 
-  // 2. EXECUTIVE COMMAND CENTER MATH ENGINE (12 Metrics)
-  // 2. EXECUTIVE COMMAND CENTER MATH ENGINE (12 Metrics)
-  // 2. EXECUTIVE COMMAND CENTER MATH ENGINE (12 Metrics)
+  // 2. EXECUTIVE COMMAND CENTER MATH ENGINE (UPDATED: Stripped frontend row 1 math)
   const metrics = useMemo(() => {
     const now = new Date();
     
@@ -119,28 +128,17 @@ export default function App() {
       year: 'numeric'
     };
     
-    // Generate exact "MM/DD/YYYY" strings in Manila Time
     const todayPHT = new Intl.DateTimeFormat('en-US', options).format(now);
-    
     const yesterdayDate = new Date(now.getTime() - (24 * 60 * 60 * 1000));
     const yesterdayPHT = new Intl.DateTimeFormat('en-US', options).format(yesterdayDate);
-
-    // Keep rolling 7-day as a timestamp for math comparisons
     const sevenDaysAgoTime = now.getTime() - (7 * 24 * 60 * 60 * 1000);
     const parseCOD = (val) => parseFloat(val?.toString().replace(/,/g, '') || 0);
 
     // --- ROW 1: REVENUE & PIPELINE ---
     const yesterdayOrdersCount = orders.filter(o => o.date_processed === yesterdayPHT).length;
-    const orderTrend = yesterdayOrdersCount > 0 ? ((shopifyKpi - yesterdayOrdersCount) / yesterdayOrdersCount) * 100 : 0;
+    const orderTrend = yesterdayOrdersCount > 0 ? ((shopifyStats.totalOrders - yesterdayOrdersCount) / yesterdayOrdersCount) * 100 : 0;
 
-    // The Master "Today" Filter using strict string matching
     const todayOrders = orders.filter(o => o.date_processed === todayPHT);
-    
-    const totalSalesToday = todayOrders
-      .filter(o => o.status !== 'Cancelled')
-      .reduce((sum, o) => sum + parseCOD(o.cod_balance), 0);
-    
-    const cancelledToday = todayOrders.filter(o => o.status === 'Cancelled').length;
     
     const cashInTransit = orders
       .filter(o => o.status === 'In Transit' || o.status === 'Out for Delivery')
@@ -177,11 +175,11 @@ export default function App() {
     const deliverySuccessRate = totalFinalizedRolling > 0 ? (rollingDelivered / totalFinalizedRolling) * 100 : 0;
 
     return {
-      orderTrend, totalSalesToday, cancelledToday, cashInTransit,
+      orderTrend, cashInTransit,
       spxProcessed, jntFallback, lalamoveSameDay, actionRequired,
       deliveredToday, rejectedToday, rtsToday, deliverySuccessRate
     };
-  }, [orders, shopifyKpi]);
+  }, [orders, shopifyStats]); // Added shopifyStats dependency
 
   const formatPHP = (val) => new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', minimumFractionDigits: 0 }).format(val);
 
@@ -348,21 +346,21 @@ export default function App() {
               {/* 3x4 CSS Grid */}
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
                 
-                {/* ROW 1: REVENUE & PIPELINE */}
+                {/* ROW 1: REVENUE & PIPELINE (UPDATED to use shopifyStats) */}
                 <MetricCard 
                   title="Raw Shopify Orders (Today)" 
-                  value={shopifyKpi} 
+                  value={shopifyStats.totalOrders} 
                   icon={<Package className="text-blue-400" />}
                   trend={metrics.orderTrend}
                 />
                 <MetricCard 
-                  title="Total Sales (Less Cancelled)" 
-                  value={formatPHP(metrics.totalSalesToday)} 
+                  title="Total Sales (Shopify API)" 
+                  value={formatPHP(shopifyStats.totalSales)} 
                   icon={<DollarSign className="text-emerald-400" />}
                 />
                 <MetricCard 
                   title="Cancelled in Shopify" 
-                  value={metrics.cancelledToday} 
+                  value={shopifyStats.cancelled} 
                   icon={<XCircle className="text-red-400" />}
                 />
                 <MetricCard 
