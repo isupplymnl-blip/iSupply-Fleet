@@ -5,7 +5,7 @@ import TripleWhaleCard from './TripleWhaleCard';
 import { WORKSPACE_CONFIG } from './config';
 import { 
   Loader2, ServerCrash, Activity, Bot, TerminalSquare, 
-  DatabaseZap, Play, Square, RefreshCw, Calendar, Send, Sparkles, Cpu, Download 
+  DatabaseZap, Play, Square, RefreshCw, Calendar, Send, Sparkles, Cpu, Download, LogOut
 } from 'lucide-react';
 
 export default function App() {
@@ -37,17 +37,36 @@ export default function App() {
   const [isOracleThinking, setIsOracleThinking] = useState(false);
   const chatEndRef = useRef(null);
 
+  // --- NEW: AUTO-LOGIN CHECKER ---
+  useEffect(() => {
+    const savedWorkspace = localStorage.getItem('isupply_fleet_workspace');
+    if (savedWorkspace && WORKSPACE_CONFIG[savedWorkspace]) {
+      handleAuthentication(savedWorkspace);
+    }
+  }, []);
+
   const handleAuthentication = (workspace) => {
     setCurrentWorkspace(workspace);
     setIsAuthenticated(true);
-    const config = WORKSPACE_CONFIG[workspace];
     
+    // Save to browser memory so refresh doesn't log you out!
+    localStorage.setItem('isupply_fleet_workspace', workspace);
+    
+    const config = WORKSPACE_CONFIG[workspace];
     if (!config || !config.supabaseUrl || !config.supabaseKey) {
       setDbError(`Missing configuration keys for ${workspace}`);
       return;
     }
     setSupabase(createClient(config.supabaseUrl, config.supabaseKey));
     setGeminiKey(config.geminiKey || '');
+  };
+
+  // --- NEW: LOGOUT FUNCTION ---
+  const handleLogout = () => {
+    localStorage.removeItem('isupply_fleet_workspace');
+    setIsAuthenticated(false);
+    setCurrentWorkspace('');
+    setSupabase(null);
   };
 
   // 1. Fetch Master Data & AUTO-SYNC ENGINE
@@ -73,13 +92,12 @@ export default function App() {
       const { data: logData } = await supabase.from('cloud_logs').select('*').order('id', { ascending: false }).limit(50);
       if (logData) setCloudLogs(logData);
       
-      // Also silently peek at VPS status in case it changed
       const { data: vpsData } = await supabase.from('fleet_command').select('bot_status').eq('id', 1).single();
       if (vpsData) setVpsStatus(vpsData.bot_status);
     };
     
-    syncLogsAndOrders(); // Run immediately
-    const syncInterval = setInterval(syncLogsAndOrders, 5000); // Loop every 5s
+    syncLogsAndOrders(); 
+    const syncInterval = setInterval(syncLogsAndOrders, 5000); 
 
     return () => clearInterval(syncInterval);
   }, [supabase]);
@@ -253,7 +271,7 @@ export default function App() {
   return (
     <div className="h-screen bg-[#0B0F19] text-gray-100 flex flex-col font-sans overflow-hidden">
       
-      {/* HEADER - Responsive text size */}
+      {/* HEADER - NOW WITH DISCONNECT BUTTON */}
       <header className="bg-[#111827] border-b border-gray-800 px-4 md:px-8 py-3 md:py-4 flex justify-between items-center shadow-md z-10 shrink-0">
         <div className="flex items-center space-x-3 md:space-x-4">
           <div className="h-8 w-8 md:h-10 md:w-10 bg-emerald-500/10 border border-emerald-500/20 rounded-lg flex items-center justify-center">
@@ -267,6 +285,14 @@ export default function App() {
             </p>
           </div>
         </div>
+        
+        <button 
+          onClick={handleLogout}
+          className="flex items-center text-gray-400 hover:text-white text-xs md:text-sm font-bold border border-gray-700 bg-gray-800 px-3 py-1.5 md:px-4 md:py-2 rounded-lg transition-colors shadow-sm hover:bg-gray-700"
+        >
+          <LogOut className="h-3 w-3 md:h-4 md:w-4 mr-1.5" />
+          <span className="hidden sm:inline">DISCONNECT</span>
+        </button>
       </header>
 
       <div className="flex flex-1 overflow-hidden relative">
@@ -281,7 +307,7 @@ export default function App() {
           </nav>
         </aside>
 
-        {/* MAIN CONTENT AREA - Added bottom padding on mobile to make room for bottom nav */}
+        {/* MAIN CONTENT AREA */}
         <main className="flex-1 overflow-y-auto p-4 md:p-8 pb-24 md:pb-8 w-full">
           
           {/* TAB 1: ANALYTICS */}
@@ -353,7 +379,7 @@ export default function App() {
                   </div>
                   <button 
                     onClick={triggerFleetUpdate} disabled={isUpdatingCode}
-                    className="flex items-center justify-center px-4 py-3 md:py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-bold text-sm transition-all disabled:opacity-50 w-full md:w-auto"
+                    className="flex items-center justify-center px-4 py-3 md:py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-bold text-sm transition-all disabled:opacity-50 w-full md:w-auto border border-blue-700 shadow-md"
                   >
                     {isUpdatingCode ? <><RefreshCw className="mr-2 h-4 w-4 animate-spin" /> SENDING...</> : <><Download className="mr-2 h-4 w-4" /> UPDATE CODE</>}
                   </button>
