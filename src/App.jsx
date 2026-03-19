@@ -107,32 +107,34 @@ export default function App() {
 
   // 2. EXECUTIVE COMMAND CENTER MATH ENGINE (12 Metrics)
   // 2. EXECUTIVE COMMAND CENTER MATH ENGINE (12 Metrics)
+  // 2. EXECUTIVE COMMAND CENTER MATH ENGINE (12 Metrics)
   const metrics = useMemo(() => {
     const now = new Date();
     
-    // BULLETPROOF DATE MATCHER: Compares actual day/month/year mathematically
-    const isSameDay = (dateStr, targetDate) => {
-      if (!dateStr) return false;
-      const d = new Date(dateStr);
-      // Failsafe in case JS can't parse the date string
-      if (isNaN(d.getTime())) return false; 
-      return d.getDate() === targetDate.getDate() &&
-             d.getMonth() === targetDate.getMonth() &&
-             d.getFullYear() === targetDate.getFullYear();
+    // --- STRICT PHT DATE FORMATTER ---
+    const options = {
+      timeZone: 'Asia/Manila',
+      month: '2-digit',
+      day: '2-digit',
+      year: 'numeric'
     };
+    
+    // Generate exact "MM/DD/YYYY" strings in Manila Time
+    const todayPHT = new Intl.DateTimeFormat('en-US', options).format(now);
+    
+    const yesterdayDate = new Date(now.getTime() - (24 * 60 * 60 * 1000));
+    const yesterdayPHT = new Intl.DateTimeFormat('en-US', options).format(yesterdayDate);
 
-    const yesterdayDate = new Date(now);
-    yesterdayDate.setDate(now.getDate() - 1);
-
-    // 7 days ago timestamp for rolling metrics
+    // Keep rolling 7-day as a timestamp for math comparisons
     const sevenDaysAgoTime = now.getTime() - (7 * 24 * 60 * 60 * 1000);
     const parseCOD = (val) => parseFloat(val?.toString().replace(/,/g, '') || 0);
 
     // --- ROW 1: REVENUE & PIPELINE ---
-    const yesterdayOrdersCount = orders.filter(o => isSameDay(o.date_processed, yesterdayDate)).length;
+    const yesterdayOrdersCount = orders.filter(o => o.date_processed === yesterdayPHT).length;
     const orderTrend = yesterdayOrdersCount > 0 ? ((shopifyKpi - yesterdayOrdersCount) / yesterdayOrdersCount) * 100 : 0;
 
-    const todayOrders = orders.filter(o => isSameDay(o.date_processed, now));
+    // The Master "Today" Filter using strict string matching
+    const todayOrders = orders.filter(o => o.date_processed === todayPHT);
     
     const totalSalesToday = todayOrders
       .filter(o => o.status !== 'Cancelled')
