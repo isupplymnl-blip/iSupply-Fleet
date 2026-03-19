@@ -5,7 +5,7 @@ import TripleWhaleCard from './TripleWhaleCard';
 import { WORKSPACE_CONFIG } from './config';
 import { 
   Loader2, ServerCrash, Activity, Bot, TerminalSquare, 
-  DatabaseZap, Play, Square, RefreshCw, Calendar, Send, Sparkles, Cpu, Download, LogOut
+  DatabaseZap, Play, Square, RefreshCw, Calendar, Send, Sparkles, Cpu, Download, LogOut, ShoppingBag
 } from 'lucide-react';
 
 export default function App() {
@@ -24,6 +24,7 @@ export default function App() {
   // Filters & VPS State
   const [dateFilter, setDateFilter] = useState('Last 30 Days');
   const [vpsStatus, setVpsStatus] = useState('UNKNOWN');
+  const [shopifyKpi, setShopifyKpi] = useState(0); // <--- NEW: Raw Shopify Orders State
   const [isToggling, setIsToggling] = useState(false);
   const [isUpdatingCode, setIsUpdatingCode] = useState(false);
 
@@ -37,7 +38,7 @@ export default function App() {
   const [isOracleThinking, setIsOracleThinking] = useState(false);
   const chatEndRef = useRef(null);
 
-  // --- NEW: AUTO-LOGIN CHECKER ---
+  // --- AUTO-LOGIN CHECKER ---
   useEffect(() => {
     const savedWorkspace = localStorage.getItem('isupply_fleet_workspace');
     if (savedWorkspace && WORKSPACE_CONFIG[savedWorkspace]) {
@@ -48,8 +49,6 @@ export default function App() {
   const handleAuthentication = (workspace) => {
     setCurrentWorkspace(workspace);
     setIsAuthenticated(true);
-    
-    // Save to browser memory so refresh doesn't log you out!
     localStorage.setItem('isupply_fleet_workspace', workspace);
     
     const config = WORKSPACE_CONFIG[workspace];
@@ -61,7 +60,6 @@ export default function App() {
     setGeminiKey(config.geminiKey || '');
   };
 
-  // --- NEW: LOGOUT FUNCTION ---
   const handleLogout = () => {
     localStorage.removeItem('isupply_fleet_workspace');
     setIsAuthenticated(false);
@@ -79,8 +77,12 @@ export default function App() {
       const { data: orderData } = await supabase.from('orders').select('*').order('id', { ascending: false }).limit(2000);
       if (orderData) setOrders(orderData);
 
-      const { data: vpsData } = await supabase.from('fleet_command').select('bot_status').eq('id', 1).single();
-      if (vpsData) setVpsStatus(vpsData.bot_status);
+      // MODIFIED: Now pulling bot_status AND daily_shopify_kpi
+      const { data: vpsData } = await supabase.from('fleet_command').select('bot_status, daily_shopify_kpi').eq('id', 1).single();
+      if (vpsData) {
+        setVpsStatus(vpsData.bot_status);
+        setShopifyKpi(vpsData.daily_shopify_kpi || 0);
+      }
       
       setIsLoadingData(false);
     };
@@ -92,8 +94,12 @@ export default function App() {
       const { data: logData } = await supabase.from('cloud_logs').select('*').order('id', { ascending: false }).limit(50);
       if (logData) setCloudLogs(logData);
       
-      const { data: vpsData } = await supabase.from('fleet_command').select('bot_status').eq('id', 1).single();
-      if (vpsData) setVpsStatus(vpsData.bot_status);
+      // MODIFIED: Keep the Shopify KPI updated in real-time
+      const { data: vpsData } = await supabase.from('fleet_command').select('bot_status, daily_shopify_kpi').eq('id', 1).single();
+      if (vpsData) {
+        setVpsStatus(vpsData.bot_status);
+        setShopifyKpi(vpsData.daily_shopify_kpi || 0);
+      }
     };
     
     syncLogsAndOrders(); 
@@ -271,7 +277,7 @@ export default function App() {
   return (
     <div className="h-screen bg-[#0B0F19] text-gray-100 flex flex-col font-sans overflow-hidden">
       
-      {/* HEADER - NOW WITH DISCONNECT BUTTON */}
+      {/* HEADER */}
       <header className="bg-[#111827] border-b border-gray-800 px-4 md:px-8 py-3 md:py-4 flex justify-between items-center shadow-md z-10 shrink-0">
         <div className="flex items-center space-x-3 md:space-x-4">
           <div className="h-8 w-8 md:h-10 md:w-10 bg-emerald-500/10 border border-emerald-500/20 rounded-lg flex items-center justify-center">
@@ -297,7 +303,7 @@ export default function App() {
 
       <div className="flex flex-1 overflow-hidden relative">
         
-        {/* DESKTOP SIDEBAR - Hidden on mobile */}
+        {/* DESKTOP SIDEBAR */}
         <aside className="hidden md:flex w-64 bg-[#111827] border-r border-gray-800 flex-col pt-6 shrink-0">
           <nav className="flex-1 px-4 space-y-2">
             <button onClick={() => setActiveTab('analytics')} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg font-bold transition-all ${activeTab === 'analytics' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}><Activity className="h-5 w-5" /> <span>Live Summary</span></button>
@@ -313,9 +319,20 @@ export default function App() {
           {/* TAB 1: ANALYTICS */}
           {activeTab === 'analytics' && (
             <div className="space-y-6 fade-in max-w-7xl mx-auto">
+              
               <div className="flex flex-col md:flex-row md:justify-between md:items-end gap-4 mb-4">
-                <h2 className="text-xl md:text-2xl font-bold text-white">Store Logistics</h2>
-                <div className="flex items-center space-x-2 bg-[#1F2937] border border-gray-700 rounded-lg px-3 py-2 w-full md:w-auto">
+                <div>
+                  <h2 className="text-xl md:text-2xl font-bold text-white mb-3">Store Logistics</h2>
+                  
+                  {/* NEW: RAW SHOPIFY KPI BANNER */}
+                  <div className="inline-flex items-center bg-blue-900/30 border border-blue-500/40 rounded-lg px-4 py-2 shadow-lg">
+                    <ShoppingBag className="text-blue-400 h-5 w-5 mr-3" />
+                    <span className="text-blue-200 font-bold text-xs md:text-sm mr-4 uppercase tracking-wider">Raw Shopify Orders Today</span>
+                    <span className="text-blue-400 font-black text-xl md:text-2xl">{shopifyKpi.toLocaleString()}</span>
+                  </div>
+                </div>
+                
+                <div className="flex items-center space-x-2 bg-[#1F2937] border border-gray-700 rounded-lg px-3 py-2 w-full md:w-auto mt-2 md:mt-0">
                   <Calendar className="h-4 w-4 text-gray-400" />
                   <select value={dateFilter} onChange={(e) => setDateFilter(e.target.value)} className="bg-transparent text-white font-semibold focus:outline-none text-sm cursor-pointer w-full">
                     <option value="Today">Today</option><option value="Last 7 Days">Last 7 Days</option><option value="Last 30 Days">Last 30 Days</option><option value="All Time">All Time</option>
@@ -324,7 +341,7 @@ export default function App() {
               </div>
               
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6">
-                <TripleWhaleCard title="🛍️ TOTAL ORDERS" value={dashboardStats.ordersCurr} trendPct={dashboardStats.ordersTrend} data={dashboardStats.arrOrders} color="#3b82f6" />
+                <TripleWhaleCard title="🛍️ BOT PROCESSED (TOTAL)" value={dashboardStats.ordersCurr} trendPct={dashboardStats.ordersTrend} data={dashboardStats.arrOrders} color="#3b82f6" />
                 <TripleWhaleCard title="💰 SECURED CASH" value={`₱${dashboardStats.secCodCurr.toLocaleString()}`} trendPct={dashboardStats.secTrend} data={dashboardStats.arrSec} color="#10b981" />
                 <TripleWhaleCard title="⚠️ LOST COGS (RTS)" value={`₱${dashboardStats.lostCodCurr.toLocaleString()}`} trendPct={dashboardStats.lostTrend} data={dashboardStats.arrLost} color="#ef4444" />
               </div>
@@ -451,7 +468,7 @@ export default function App() {
           )}
         </main>
 
-        {/* MOBILE BOTTOM NAVIGATION - Hidden on Desktop */}
+        {/* MOBILE BOTTOM NAVIGATION */}
         <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-[#111827] border-t border-gray-800 flex justify-around items-center p-2 z-50 shadow-[0_-4px_10px_rgba(0,0,0,0.3)]">
           <button onClick={() => setActiveTab('analytics')} className={`flex flex-col items-center p-2 rounded-lg transition-colors ${activeTab === 'analytics' ? 'text-emerald-400' : 'text-gray-500 hover:text-gray-300'}`}>
             <Activity className="h-6 w-6 mb-1" />
