@@ -5,7 +5,9 @@ import TripleWhaleCard from './TripleWhaleCard';
 import { WORKSPACE_CONFIG } from './config';
 import { 
   Loader2, ServerCrash, Activity, Bot, TerminalSquare, 
-  DatabaseZap, Play, Square, RefreshCw, Calendar, Send, Sparkles, Cpu, Download, LogOut, ShoppingBag
+  DatabaseZap, Play, Square, RefreshCw, Calendar, Send, Sparkles, Cpu, Download, LogOut, ShoppingBag,
+  // NEW ICONS ADDED HERE:
+  TrendingUp, TrendingDown, AlertCircle, Package, Truck, CheckCircle2, XCircle, RefreshCcw, DollarSign 
 } from 'lucide-react';
 
 export default function App() {
@@ -24,7 +26,7 @@ export default function App() {
   // Filters & VPS State
   const [dateFilter, setDateFilter] = useState('Last 30 Days');
   const [vpsStatus, setVpsStatus] = useState('UNKNOWN');
-  const [shopifyKpi, setShopifyKpi] = useState(0); // <--- NEW: Raw Shopify Orders State
+  const [shopifyKpi, setShopifyKpi] = useState(0); 
   const [isToggling, setIsToggling] = useState(false);
   const [isUpdatingCode, setIsUpdatingCode] = useState(false);
 
@@ -74,10 +76,9 @@ export default function App() {
     // Heavy Fetch (Runs Once)
     const bootSystem = async () => {
       setIsLoadingData(true);
-      const { data: orderData } = await supabase.from('orders').select('*').order('id', { ascending: false }).limit(2000);
+      const { data: orderData } = await supabase.from('orders').select('*').order('id', { ascending: false }).limit(3000);
       if (orderData) setOrders(orderData);
 
-      // MODIFIED: Now pulling bot_status AND daily_shopify_kpi
       const { data: vpsData } = await supabase.from('fleet_command').select('bot_status, daily_shopify_kpi').eq('id', 1).single();
       if (vpsData) {
         setVpsStatus(vpsData.bot_status);
@@ -94,7 +95,6 @@ export default function App() {
       const { data: logData } = await supabase.from('cloud_logs').select('*').order('id', { ascending: false }).limit(50);
       if (logData) setCloudLogs(logData);
       
-      // MODIFIED: Keep the Shopify KPI updated in real-time
       const { data: vpsData } = await supabase.from('fleet_command').select('bot_status, daily_shopify_kpi').eq('id', 1).single();
       if (vpsData) {
         setVpsStatus(vpsData.bot_status);
@@ -113,7 +113,7 @@ export default function App() {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatHistory, isOracleThinking]);
 
-  // 2. Translated Dashboard Math Engine
+  // 2A. Old Dashboard Math Engine (Kept alive for the Oracle Context)
   const dashboardStats = useMemo(() => {
     let ordersCurr = 0, ordersPrev = 0, expCodCurr = 0, expCodPrev = 0, secCodCurr = 0, secCodPrev = 0, lostCodCurr = 0, lostCodPrev = 0, delCount = 0, totalFinalized = 0;
     const arrOrders = Array(7).fill(0), arrSec = Array(7).fill(0), arrLost = Array(7).fill(0);
@@ -142,25 +142,72 @@ export default function App() {
         if (status === 'Delivered') secCodPrev += val;
         else if (status === 'Rejected' || status === 'RTS') lostCodPrev += val;
       }
-
-      if (diffDays <= 7) {
-        const idx = 7 - diffDays;
-        if(idx >= 0 && idx < 7) {
-            arrOrders[idx]++;
-            if (status === 'Delivered') arrSec[idx] += val;
-            else if (status === 'Rejected' || status === 'RTS') arrLost[idx] += val;
-        }
-      }
     });
 
-    const calcTrend = (curr, prev) => prev !== 0 ? ((curr - prev) / prev) * 100 : 0.0;
-    return {
-      ordersCurr, ordersTrend: calcTrend(ordersCurr, ordersPrev), arrOrders,
-      secCodCurr, secTrend: calcTrend(secCodCurr, secCodPrev), arrSec,
-      lostCodCurr, lostTrend: calcTrend(lostCodCurr, lostCodPrev), arrLost,
-      rateCurr: totalFinalized > 0 ? (delCount / totalFinalized) * 100 : 0
-    };
+    return { secCodCurr };
   }, [orders, dateFilter]);
+
+  // 2B. NEW Executive Dashboard Crunching Engine
+  const executiveMetrics = useMemo(() => {
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const yesterday = today - (24 * 60 * 60 * 1000);
+    const sevenDaysAgo = today - (7 * 24 * 60 * 60 * 1000);
+
+    const parseCOD = (val) => parseFloat(val?.toString().replace(/,/g, '') || 0);
+    const getOrderTime = (dateStr) => {
+      if (!dateStr) return 0;
+      const d = new Date(dateStr);
+      return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    };
+
+    // --- Row 1: Top-Line Revenue & Pipeline ---
+    const yesterdayOrdersCount = orders.filter(o => getOrderTime(o.date_processed) === yesterday).length;
+    const orderTrend = yesterdayOrdersCount > 0 
+      ? ((shopifyKpi - yesterdayOrdersCount) / yesterdayOrdersCount) * 100 
+      : 0;
+
+    const todayOrders = orders.filter(o => getOrderTime(o.date_processed) === today);
+    
+    const totalSalesToday = todayOrders
+      .filter(o => o.status !== 'Cancelled')
+      .reduce((sum, o) => sum + parseCOD(o.cod_balance), 0);
+    
+    const cancelledToday = todayOrders.filter(o => o.status === 'Cancelled').length;
+    
+    const cashInTransit = orders
+      .filter(o => ['In Transit', 'Out for Delivery'].includes(o.status))
+      .reduce((sum, o) => sum + parseCOD(o.cod_balance), 0);
+
+    // --- Row 2: Logistics Routing & Operations ---
+    const spxProcessed = todayOrders.filter(o => o.status === 'Fulfilled (SPX)').length;
+    const jntFallback = todayOrders.filter(o => o.status === 'Sent to Slack (JNT Fallback)').length;
+    const lalamoveSameDay = todayOrders.filter(o => o.status === 'Sent to Slack (Lalamove)').length;
+    const actionRequired = orders.filter(o => o.status === 'Sent to Slack (Missing Info)').length;
+
+    // --- Row 3: Last Mile Outcomes ---
+    const deliveredToday = todayOrders.filter(o => o.status === 'Delivered').length;
+    const rejectedToday = todayOrders.filter(o => o.status === 'Rejected').length;
+    const rtsToday = todayOrders.filter(o => ['RTS', 'Returning', 'Returned'].includes(o.status)).length;
+
+    // Rolling 7-Day Success Rate
+    const rollingOrders = orders.filter(o => getOrderTime(o.date_processed) >= sevenDaysAgo);
+    const rollingDelivered = rollingOrders.filter(o => o.status === 'Delivered').length;
+    const rollingFailed = rollingOrders.filter(o => ['RTS', 'Rejected', 'Returning', 'Returned'].includes(o.status)).length;
+    const totalFinalizedRolling = rollingDelivered + rollingFailed;
+    const deliverySuccessRate = totalFinalizedRolling > 0 
+      ? (rollingDelivered / totalFinalizedRolling) * 100 
+      : 0;
+
+    return {
+      orderTrend, totalSalesToday, cancelledToday, cashInTransit,
+      spxProcessed, jntFallback, lalamoveSameDay, actionRequired,
+      deliveredToday, rejectedToday, rtsToday, deliverySuccessRate
+    };
+  }, [orders, shopifyKpi]);
+
+  const formatPHP = (val) => new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', minimumFractionDigits: 0 }).format(val);
+
 
   // 3. VPS Controls
   const toggleVPS = async () => {
@@ -316,37 +363,105 @@ export default function App() {
         {/* MAIN CONTENT AREA */}
         <main className="flex-1 overflow-y-auto p-4 md:p-8 pb-24 md:pb-8 w-full">
           
-          {/* TAB 1: ANALYTICS */}
+          {/* TAB 1: NEW EXECUTIVE DASHBOARD (ANALYTICS) */}
           {activeTab === 'analytics' && (
             <div className="space-y-6 fade-in max-w-7xl mx-auto">
               
-              <div className="flex flex-col md:flex-row md:justify-between md:items-end gap-4 mb-4">
-                <div>
-                  <h2 className="text-xl md:text-2xl font-bold text-white mb-3">Store Logistics</h2>
-                  
-                  {/* NEW: RAW SHOPIFY KPI BANNER */}
-                  <div className="inline-flex items-center bg-blue-900/30 border border-blue-500/40 rounded-lg px-4 py-2 shadow-lg">
-                    <ShoppingBag className="text-blue-400 h-5 w-5 mr-3" />
-                    <span className="text-blue-200 font-bold text-xs md:text-sm mr-4 uppercase tracking-wider">Raw Shopify Orders Today</span>
-                    <span className="text-blue-400 font-black text-xl md:text-2xl">{shopifyKpi.toLocaleString()}</span>
-                  </div>
-                </div>
-                
-                <div className="flex items-center space-x-2 bg-[#1F2937] border border-gray-700 rounded-lg px-3 py-2 w-full md:w-auto mt-2 md:mt-0">
-                  <Calendar className="h-4 w-4 text-gray-400" />
-                  <select value={dateFilter} onChange={(e) => setDateFilter(e.target.value)} className="bg-transparent text-white font-semibold focus:outline-none text-sm cursor-pointer w-full">
-                    <option value="Today">Today</option><option value="Last 7 Days">Last 7 Days</option><option value="Last 30 Days">Last 30 Days</option><option value="All Time">All Time</option>
-                  </select>
-                </div>
+              {/* NEW Dashboard Header */}
+              <div className="mb-6">
+                <h1 className="text-2xl md:text-3xl font-extrabold text-white tracking-wide">Executive Command Center</h1>
+                <p className="text-gray-400 mt-1">Live Telemetry & Logistics Operations</p>
               </div>
               
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6">
-                <TripleWhaleCard title="🛍️ BOT PROCESSED (TOTAL)" value={dashboardStats.ordersCurr} trendPct={dashboardStats.ordersTrend} data={dashboardStats.arrOrders} color="#3b82f6" />
-                <TripleWhaleCard title="💰 SECURED CASH" value={`₱${dashboardStats.secCodCurr.toLocaleString()}`} trendPct={dashboardStats.secTrend} data={dashboardStats.arrSec} color="#10b981" />
-                <TripleWhaleCard title="⚠️ LOST COGS (RTS)" value={`₱${dashboardStats.lostCodCurr.toLocaleString()}`} trendPct={dashboardStats.lostTrend} data={dashboardStats.arrLost} color="#ef4444" />
-              </div>
-              <p className="text-gray-500 text-xs md:text-sm mt-2 text-right font-bold">🎯 Finalized Delivery Rate: {dashboardStats.rateCurr.toFixed(1)}%</p>
+              {/* 3x4 CSS Grid from your snippet */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
+                
+                {/* ================= ROW 1: REVENUE & PIPELINE ================= */}
+                <MetricCard 
+                  title="Raw Shopify Orders (Today)" 
+                  value={shopifyKpi} 
+                  icon={<Package className="text-blue-400" />}
+                  trend={executiveMetrics.orderTrend}
+                />
+                <MetricCard 
+                  title="Total Sales (Less Cancelled)" 
+                  value={formatPHP(executiveMetrics.totalSalesToday)} 
+                  icon={<DollarSign className="text-emerald-400" />}
+                />
+                <MetricCard 
+                  title="Cancelled in Shopify" 
+                  value={executiveMetrics.cancelledToday} 
+                  icon={<XCircle className="text-red-400" />}
+                />
+                <MetricCard 
+                  title="Cash in Transit (Active)" 
+                  value={formatPHP(executiveMetrics.cashInTransit)} 
+                  icon={<Truck className="text-purple-400" />}
+                />
 
+                {/* ================= ROW 2: LOGISTICS ROUTING ================= */}
+                <MetricCard 
+                  title="Processed via SPX" 
+                  value={executiveMetrics.spxProcessed} 
+                  icon={<CheckCircle2 className="text-orange-500" />}
+                />
+                <MetricCard 
+                  title="JNT Fallback" 
+                  value={executiveMetrics.jntFallback} 
+                  icon={<RefreshCcw className="text-red-500" />}
+                />
+                <MetricCard 
+                  title="Lalamove (Same Day)" 
+                  value={executiveMetrics.lalamoveSameDay} 
+                  icon={<Truck className="text-yellow-500" />}
+                />
+                {/* Action Required - Highlighted Card */}
+                <div className="bg-[#1f0f0f] border-2 border-red-500/50 rounded-xl p-4 md:p-5 shadow-[0_0_15px_rgba(239,68,68,0.15)] flex flex-col justify-between transform transition-all hover:-translate-y-1">
+                  <div className="flex justify-between items-start">
+                    <h3 className="text-red-400 font-bold text-sm tracking-wide">Action Required (CS)</h3>
+                    <AlertCircle className="text-red-500 animate-pulse" />
+                  </div>
+                  <div className="mt-4">
+                    <span className="text-3xl md:text-4xl font-black text-white">{executiveMetrics.actionRequired}</span>
+                    <p className="text-xs text-red-400/80 mt-1 font-semibold uppercase tracking-wider">Missing Info / Unresolved</p>
+                  </div>
+                </div>
+
+                {/* ================= ROW 3: LAST MILE OUTCOMES ================= */}
+                <MetricCard 
+                  title="Delivered Today" 
+                  value={executiveMetrics.deliveredToday} 
+                  icon={<CheckCircle2 className="text-emerald-500" />}
+                />
+                <MetricCard 
+                  title="Rejected by Customer" 
+                  value={executiveMetrics.rejectedToday} 
+                  icon={<XCircle className="text-red-500" />}
+                />
+                <MetricCard 
+                  title="RTS (Returned to Sender)" 
+                  value={executiveMetrics.rtsToday} 
+                  icon={<RefreshCcw className="text-orange-500" />}
+                />
+                {/* Success Rate Card with Color Logic */}
+                <div className="bg-[#1F2937] border border-gray-800 rounded-xl p-4 md:p-5 shadow-lg flex flex-col justify-between">
+                  <div className="flex justify-between items-start">
+                    <h3 className="text-gray-400 font-bold text-sm tracking-wide">Delivery Success (7-Day)</h3>
+                    <TrendingUp className="text-gray-500" />
+                  </div>
+                  <div className="mt-4">
+                    <span className={`text-3xl md:text-4xl font-black ${
+                      executiveMetrics.deliverySuccessRate > 85 ? 'text-emerald-500' : 
+                      executiveMetrics.deliverySuccessRate < 80 ? 'text-red-500' : 'text-yellow-500'
+                    }`}>
+                      {executiveMetrics.deliverySuccessRate.toFixed(1)}%
+                    </span>
+                  </div>
+                </div>
+
+              </div>
+
+              {/* Lighthouse AI kept below the new metrics */}
               <div className="mt-8">
                 <div className="flex flex-col md:flex-row md:items-center justify-between mb-4 gap-3">
                   <h3 className="text-lg md:text-xl font-bold text-white flex items-center">
@@ -488,6 +603,30 @@ export default function App() {
           </button>
         </nav>
 
+      </div>
+    </div>
+  );
+}
+
+// Reusable Standard Metric Card Component (Moved outside the main App component)
+function MetricCard({ title, value, icon, trend }) {
+  return (
+    <div className="bg-[#1F2937] border border-gray-800 rounded-xl p-4 md:p-5 shadow-lg flex flex-col justify-between transform transition-all duration-300 hover:-translate-y-1 hover:border-gray-700">
+      <div className="flex justify-between items-start">
+        <h3 className="text-gray-400 font-bold text-xs md:text-sm tracking-wide">{title}</h3>
+        {icon}
+      </div>
+      
+      <div className="mt-4 flex items-end justify-between">
+        <span className="text-2xl md:text-3xl font-black text-white">{value}</span>
+        
+        {/* Render Trend if provided */}
+        {trend !== undefined && (
+          <div className={`flex items-center text-xs md:text-sm font-bold ${trend >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
+            {trend >= 0 ? <TrendingUp className="w-3 h-3 md:w-4 md:h-4 mr-1" /> : <TrendingDown className="w-3 h-3 md:w-4 md:h-4 mr-1" />}
+            {Math.abs(trend).toFixed(1)}%
+          </div>
+        )}
       </div>
     </div>
   );
