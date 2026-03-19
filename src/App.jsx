@@ -106,26 +106,33 @@ export default function App() {
   }, [chatHistory, isOracleThinking]);
 
   // 2. EXECUTIVE COMMAND CENTER MATH ENGINE (12 Metrics)
+  // 2. EXECUTIVE COMMAND CENTER MATH ENGINE (12 Metrics)
   const metrics = useMemo(() => {
     const now = new Date();
-    // Use precise string matching for your python date format (MM/DD/YYYY) to avoid timezone bugs
-    const formatDate = (d) => `${(d.getMonth() + 1).toString().padStart(2, '0')}/${d.getDate().toString().padStart(2, '0')}/${d.getFullYear()}`;
     
-    const todayStr = formatDate(now);
+    // BULLETPROOF DATE MATCHER: Compares actual day/month/year mathematically
+    const isSameDay = (dateStr, targetDate) => {
+      if (!dateStr) return false;
+      const d = new Date(dateStr);
+      // Failsafe in case JS can't parse the date string
+      if (isNaN(d.getTime())) return false; 
+      return d.getDate() === targetDate.getDate() &&
+             d.getMonth() === targetDate.getMonth() &&
+             d.getFullYear() === targetDate.getFullYear();
+    };
+
     const yesterdayDate = new Date(now);
     yesterdayDate.setDate(now.getDate() - 1);
-    const yesterdayStr = formatDate(yesterdayDate);
 
     // 7 days ago timestamp for rolling metrics
     const sevenDaysAgoTime = now.getTime() - (7 * 24 * 60 * 60 * 1000);
-
     const parseCOD = (val) => parseFloat(val?.toString().replace(/,/g, '') || 0);
 
     // --- ROW 1: REVENUE & PIPELINE ---
-    const yesterdayOrdersCount = orders.filter(o => o.date_processed === yesterdayStr).length;
+    const yesterdayOrdersCount = orders.filter(o => isSameDay(o.date_processed, yesterdayDate)).length;
     const orderTrend = yesterdayOrdersCount > 0 ? ((shopifyKpi - yesterdayOrdersCount) / yesterdayOrdersCount) * 100 : 0;
 
-    const todayOrders = orders.filter(o => o.date_processed === todayStr);
+    const todayOrders = orders.filter(o => isSameDay(o.date_processed, now));
     
     const totalSalesToday = todayOrders
       .filter(o => o.status !== 'Cancelled')
@@ -133,7 +140,6 @@ export default function App() {
     
     const cancelledToday = todayOrders.filter(o => o.status === 'Cancelled').length;
     
-    // Cash in transit counts ALL active historical orders, not just today
     const cashInTransit = orders
       .filter(o => o.status === 'In Transit' || o.status === 'Out for Delivery')
       .reduce((sum, o) => sum + parseCOD(o.cod_balance), 0);
@@ -142,8 +148,6 @@ export default function App() {
     const spxProcessed = todayOrders.filter(o => o.status === 'Fulfilled (SPX)').length;
     const jntFallback = todayOrders.filter(o => o.status === 'Sent to Slack (JNT Fallback)').length;
     const lalamoveSameDay = todayOrders.filter(o => o.status === 'Sent to Slack (Lalamove)').length;
-    
-    // Action required counts ALL active bottlenecked orders
     const actionRequired = orders.filter(o => o.status === 'Sent to Slack (Missing Info)').length;
 
     // --- ROW 3: LAST MILE OUTCOMES ---
@@ -154,7 +158,9 @@ export default function App() {
     // Delivery Success Rate (7-Day Rolling)
     const rollingOrders = orders.filter(o => {
       if (!o.date_processed) return false;
-      return new Date(o.date_processed).getTime() >= sevenDaysAgoTime;
+      const d = new Date(o.date_processed);
+      if (isNaN(d.getTime())) return false;
+      return d.getTime() >= sevenDaysAgoTime;
     });
     
     let rollingDelivered = 0;
