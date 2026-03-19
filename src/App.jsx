@@ -1,13 +1,11 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import LoginScreen from './LoginScreen';
-import TripleWhaleCard from './TripleWhaleCard';
 import { WORKSPACE_CONFIG } from './config';
 import { 
-  Loader2, ServerCrash, Activity, Bot, TerminalSquare, 
-  DatabaseZap, Play, Square, RefreshCw, Calendar, Send, Sparkles, Cpu, Download, LogOut, ShoppingBag,
-  // NEW ICONS ADDED HERE:
-  TrendingUp, TrendingDown, AlertCircle, Package, Truck, CheckCircle2, XCircle, RefreshCcw, DollarSign 
+  Loader2, Activity, Bot, TerminalSquare, DatabaseZap, Play, Square, RefreshCw, 
+  Send, Sparkles, Cpu, Download, LogOut, TrendingUp, TrendingDown, AlertCircle, 
+  Package, Truck, CheckCircle2, XCircle, RefreshCcw, DollarSign 
 } from 'lucide-react';
 
 export default function App() {
@@ -23,8 +21,7 @@ export default function App() {
   const [isLoadingData, setIsLoadingData] = useState(false);
   const [dbError, setDbError] = useState(null);
   
-  // Filters & VPS State
-  const [dateFilter, setDateFilter] = useState('Last 30 Days');
+  // VPS State
   const [vpsStatus, setVpsStatus] = useState('UNKNOWN');
   const [shopifyKpi, setShopifyKpi] = useState(0); 
   const [isToggling, setIsToggling] = useState(false);
@@ -73,7 +70,6 @@ export default function App() {
   useEffect(() => {
     if (!supabase) return;
 
-    // Heavy Fetch (Runs Once)
     const bootSystem = async () => {
       setIsLoadingData(true);
       const { data: orderData } = await supabase.from('orders').select('*').order('id', { ascending: false }).limit(3000);
@@ -84,13 +80,11 @@ export default function App() {
         setVpsStatus(vpsData.bot_status);
         setShopifyKpi(vpsData.daily_shopify_kpi || 0);
       }
-      
       setIsLoadingData(false);
     };
 
     bootSystem();
 
-    // Background Telemetry Sync (Runs every 5 seconds silently)
     const syncLogsAndOrders = async () => {
       const { data: logData } = await supabase.from('cloud_logs').select('*').order('id', { ascending: false }).limit(50);
       if (logData) setCloudLogs(logData);
@@ -104,70 +98,34 @@ export default function App() {
     
     syncLogsAndOrders(); 
     const syncInterval = setInterval(syncLogsAndOrders, 5000); 
-
     return () => clearInterval(syncInterval);
   }, [supabase]);
 
-  // Scroll Chat automatically
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatHistory, isOracleThinking]);
 
-  // 2A. Old Dashboard Math Engine (Kept alive for the Oracle Context)
-  const dashboardStats = useMemo(() => {
-    let ordersCurr = 0, ordersPrev = 0, expCodCurr = 0, expCodPrev = 0, secCodCurr = 0, secCodPrev = 0, lostCodCurr = 0, lostCodPrev = 0, delCount = 0, totalFinalized = 0;
-    const arrOrders = Array(7).fill(0), arrSec = Array(7).fill(0), arrLost = Array(7).fill(0);
+  // 2. EXECUTIVE COMMAND CENTER MATH ENGINE (12 Metrics)
+  const metrics = useMemo(() => {
     const now = new Date();
+    // Use precise string matching for your python date format (MM/DD/YYYY) to avoid timezone bugs
+    const formatDate = (d) => `${(d.getMonth() + 1).toString().padStart(2, '0')}/${d.getDate().toString().padStart(2, '0')}/${d.getFullYear()}`;
+    
+    const todayStr = formatDate(now);
+    const yesterdayDate = new Date(now);
+    yesterdayDate.setDate(now.getDate() - 1);
+    const yesterdayStr = formatDate(yesterdayDate);
 
-    orders.forEach(row => {
-      if (!row.date_processed) return;
-      const rowDate = new Date(row.date_processed);
-      const diffDays = Math.ceil(Math.abs(now - rowDate) / (1000 * 60 * 60 * 24)); 
-      
-      let inCurrPeriod = false, isPrevPeriod = false;
-      if (dateFilter === 'Today') { inCurrPeriod = diffDays <= 1; isPrevPeriod = diffDays === 2; } 
-      else if (dateFilter === 'Last 7 Days') { inCurrPeriod = diffDays <= 7; isPrevPeriod = diffDays > 7 && diffDays <= 14; } 
-      else if (dateFilter === 'Last 30 Days') { inCurrPeriod = diffDays <= 30; isPrevPeriod = diffDays > 30 && diffDays <= 60; } 
-      else { inCurrPeriod = true; }
-
-      const val = parseFloat(row.cod_balance?.toString().replace(/,/g, '') || 0);
-      const status = row.status || '';
-
-      if (inCurrPeriod) {
-        ordersCurr++; expCodCurr += val;
-        if (status === 'Delivered') { secCodCurr += val; delCount++; totalFinalized++; }
-        else if (status === 'Rejected' || status === 'RTS') { lostCodCurr += val; totalFinalized++; }
-      } else if (isPrevPeriod) {
-        ordersPrev++; expCodPrev += val;
-        if (status === 'Delivered') secCodPrev += val;
-        else if (status === 'Rejected' || status === 'RTS') lostCodPrev += val;
-      }
-    });
-
-    return { secCodCurr };
-  }, [orders, dateFilter]);
-
-  // 2B. NEW Executive Dashboard Crunching Engine
-  const executiveMetrics = useMemo(() => {
-    const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-    const yesterday = today - (24 * 60 * 60 * 1000);
-    const sevenDaysAgo = today - (7 * 24 * 60 * 60 * 1000);
+    // 7 days ago timestamp for rolling metrics
+    const sevenDaysAgoTime = now.getTime() - (7 * 24 * 60 * 60 * 1000);
 
     const parseCOD = (val) => parseFloat(val?.toString().replace(/,/g, '') || 0);
-    const getOrderTime = (dateStr) => {
-      if (!dateStr) return 0;
-      const d = new Date(dateStr);
-      return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-    };
 
-    // --- Row 1: Top-Line Revenue & Pipeline ---
-    const yesterdayOrdersCount = orders.filter(o => getOrderTime(o.date_processed) === yesterday).length;
-    const orderTrend = yesterdayOrdersCount > 0 
-      ? ((shopifyKpi - yesterdayOrdersCount) / yesterdayOrdersCount) * 100 
-      : 0;
+    // --- ROW 1: REVENUE & PIPELINE ---
+    const yesterdayOrdersCount = orders.filter(o => o.date_processed === yesterdayStr).length;
+    const orderTrend = yesterdayOrdersCount > 0 ? ((shopifyKpi - yesterdayOrdersCount) / yesterdayOrdersCount) * 100 : 0;
 
-    const todayOrders = orders.filter(o => getOrderTime(o.date_processed) === today);
+    const todayOrders = orders.filter(o => o.date_processed === todayStr);
     
     const totalSalesToday = todayOrders
       .filter(o => o.status !== 'Cancelled')
@@ -175,29 +133,40 @@ export default function App() {
     
     const cancelledToday = todayOrders.filter(o => o.status === 'Cancelled').length;
     
+    // Cash in transit counts ALL active historical orders, not just today
     const cashInTransit = orders
-      .filter(o => ['In Transit', 'Out for Delivery'].includes(o.status))
+      .filter(o => o.status === 'In Transit' || o.status === 'Out for Delivery')
       .reduce((sum, o) => sum + parseCOD(o.cod_balance), 0);
 
-    // --- Row 2: Logistics Routing & Operations ---
+    // --- ROW 2: LOGISTICS ROUTING ---
     const spxProcessed = todayOrders.filter(o => o.status === 'Fulfilled (SPX)').length;
     const jntFallback = todayOrders.filter(o => o.status === 'Sent to Slack (JNT Fallback)').length;
     const lalamoveSameDay = todayOrders.filter(o => o.status === 'Sent to Slack (Lalamove)').length;
+    
+    // Action required counts ALL active bottlenecked orders
     const actionRequired = orders.filter(o => o.status === 'Sent to Slack (Missing Info)').length;
 
-    // --- Row 3: Last Mile Outcomes ---
+    // --- ROW 3: LAST MILE OUTCOMES ---
     const deliveredToday = todayOrders.filter(o => o.status === 'Delivered').length;
     const rejectedToday = todayOrders.filter(o => o.status === 'Rejected').length;
     const rtsToday = todayOrders.filter(o => ['RTS', 'Returning', 'Returned'].includes(o.status)).length;
 
-    // Rolling 7-Day Success Rate
-    const rollingOrders = orders.filter(o => getOrderTime(o.date_processed) >= sevenDaysAgo);
-    const rollingDelivered = rollingOrders.filter(o => o.status === 'Delivered').length;
-    const rollingFailed = rollingOrders.filter(o => ['RTS', 'Rejected', 'Returning', 'Returned'].includes(o.status)).length;
+    // Delivery Success Rate (7-Day Rolling)
+    const rollingOrders = orders.filter(o => {
+      if (!o.date_processed) return false;
+      return new Date(o.date_processed).getTime() >= sevenDaysAgoTime;
+    });
+    
+    let rollingDelivered = 0;
+    let rollingFailed = 0;
+    
+    rollingOrders.forEach(o => {
+      if (o.status === 'Delivered') rollingDelivered++;
+      else if (['RTS', 'Rejected', 'Returning', 'Returned'].includes(o.status)) rollingFailed++;
+    });
+
     const totalFinalizedRolling = rollingDelivered + rollingFailed;
-    const deliverySuccessRate = totalFinalizedRolling > 0 
-      ? (rollingDelivered / totalFinalizedRolling) * 100 
-      : 0;
+    const deliverySuccessRate = totalFinalizedRolling > 0 ? (rollingDelivered / totalFinalizedRolling) * 100 : 0;
 
     return {
       orderTrend, totalSalesToday, cancelledToday, cashInTransit,
@@ -207,7 +176,6 @@ export default function App() {
   }, [orders, shopifyKpi]);
 
   const formatPHP = (val) => new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP', minimumFractionDigits: 0 }).format(val);
-
 
   // 3. VPS Controls
   const toggleVPS = async () => {
@@ -230,10 +198,7 @@ export default function App() {
   // 4. Gemini API Helper
   const callGeminiAPI = async (prompt, systemInstruction = null) => {
     if (!geminiKey) throw new Error("API Key Missing");
-    const payload = {
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.7 }
-    };
+    const payload = { contents: [{ role: "user", parts: [{ text: prompt }] }], generationConfig: { temperature: 0.7 } };
     if (systemInstruction) payload.systemInstruction = { parts: [{ text: systemInstruction }] };
     
     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`, {
@@ -300,7 +265,7 @@ export default function App() {
     setChatHistory(prev => [...prev, { role: 'user', text: userMessage }]);
     setIsOracleThinking(true);
 
-    const full_context = `[INVISIBLE BACKGROUND DATA] TOTAL ORDERS: ${orders.length} SECURED REVENUE: P${dashboardStats.secCodCurr} RTS: ${orders.filter(o => o.status === 'RTS' || o.status === 'Rejected').length}\nCOO MESSAGE: "${userMessage}"`;
+    const full_context = `[INVISIBLE BACKGROUND DATA] TOTAL ORDERS: ${orders.length}\nCOO MESSAGE: "${userMessage}"`;
     const systemInstruction = `You are the 'iSupply Omni-Oracle', AI Executive Partner to the COO. Keep answers punchy. COMMANDS: Output [COMMAND: START_FLEET] or [COMMAND: STOP_FLEET] if the user wants to start/stop the VPS bot.`;
 
     try {
@@ -353,7 +318,7 @@ export default function App() {
         {/* DESKTOP SIDEBAR */}
         <aside className="hidden md:flex w-64 bg-[#111827] border-r border-gray-800 flex-col pt-6 shrink-0">
           <nav className="flex-1 px-4 space-y-2">
-            <button onClick={() => setActiveTab('analytics')} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg font-bold transition-all ${activeTab === 'analytics' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}><Activity className="h-5 w-5" /> <span>Live Summary</span></button>
+            <button onClick={() => setActiveTab('analytics')} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg font-bold transition-all ${activeTab === 'analytics' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}><Activity className="h-5 w-5" /> <span>Command Center</span></button>
             <button onClick={() => setActiveTab('engine')} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg font-bold transition-all ${activeTab === 'engine' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}><Cpu className="h-5 w-5" /> <span>Fulfillment Engine</span></button>
             <button onClick={() => setActiveTab('oracle')} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg font-bold transition-all ${activeTab === 'oracle' ? 'bg-purple-500/10 text-purple-400 border border-purple-500/20' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}><Bot className="h-5 w-5" /> <span>System Oracle (AI)</span></button>
             <button onClick={() => setActiveTab('logs')} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg font-bold transition-all ${activeTab === 'logs' ? 'bg-gray-700 text-white border border-gray-600' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}><TerminalSquare className="h-5 w-5" /> <span>Telemetry</span></button>
@@ -363,106 +328,107 @@ export default function App() {
         {/* MAIN CONTENT AREA */}
         <main className="flex-1 overflow-y-auto p-4 md:p-8 pb-24 md:pb-8 w-full">
           
-          {/* TAB 1: NEW EXECUTIVE DASHBOARD (ANALYTICS) */}
+          {/* ================= TAB 1: EXECUTIVE COMMAND CENTER ================= */}
           {activeTab === 'analytics' && (
             <div className="space-y-6 fade-in max-w-7xl mx-auto">
               
-              {/* NEW Dashboard Header */}
               <div className="mb-6">
-                <h1 className="text-2xl md:text-3xl font-extrabold text-white tracking-wide">Executive Command Center</h1>
-                <p className="text-gray-400 mt-1">Live Telemetry & Logistics Operations</p>
+                <h2 className="text-2xl md:text-3xl font-bold text-white tracking-wide">Executive Command Center</h2>
+                <p className="text-gray-400 mt-1 text-sm md:text-base">Live Logistics & Pipeline Outcomes</p>
               </div>
               
-              {/* 3x4 CSS Grid from your snippet */}
+              {/* 3x4 CSS Grid */}
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
                 
-                {/* ================= ROW 1: REVENUE & PIPELINE ================= */}
+                {/* ROW 1: REVENUE & PIPELINE */}
                 <MetricCard 
                   title="Raw Shopify Orders (Today)" 
                   value={shopifyKpi} 
                   icon={<Package className="text-blue-400" />}
-                  trend={executiveMetrics.orderTrend}
+                  trend={metrics.orderTrend}
                 />
                 <MetricCard 
                   title="Total Sales (Less Cancelled)" 
-                  value={formatPHP(executiveMetrics.totalSalesToday)} 
+                  value={formatPHP(metrics.totalSalesToday)} 
                   icon={<DollarSign className="text-emerald-400" />}
                 />
                 <MetricCard 
                   title="Cancelled in Shopify" 
-                  value={executiveMetrics.cancelledToday} 
+                  value={metrics.cancelledToday} 
                   icon={<XCircle className="text-red-400" />}
                 />
                 <MetricCard 
                   title="Cash in Transit (Active)" 
-                  value={formatPHP(executiveMetrics.cashInTransit)} 
+                  value={formatPHP(metrics.cashInTransit)} 
                   icon={<Truck className="text-purple-400" />}
                 />
 
-                {/* ================= ROW 2: LOGISTICS ROUTING ================= */}
+                {/* ROW 2: LOGISTICS ROUTING */}
                 <MetricCard 
                   title="Processed via SPX" 
-                  value={executiveMetrics.spxProcessed} 
+                  value={metrics.spxProcessed} 
                   icon={<CheckCircle2 className="text-orange-500" />}
                 />
                 <MetricCard 
                   title="JNT Fallback" 
-                  value={executiveMetrics.jntFallback} 
+                  value={metrics.jntFallback} 
                   icon={<RefreshCcw className="text-red-500" />}
                 />
                 <MetricCard 
                   title="Lalamove (Same Day)" 
-                  value={executiveMetrics.lalamoveSameDay} 
+                  value={metrics.lalamoveSameDay} 
                   icon={<Truck className="text-yellow-500" />}
                 />
+                
                 {/* Action Required - Highlighted Card */}
-                <div className="bg-[#1f0f0f] border-2 border-red-500/50 rounded-xl p-4 md:p-5 shadow-[0_0_15px_rgba(239,68,68,0.15)] flex flex-col justify-between transform transition-all hover:-translate-y-1">
+                <div className="bg-[#1f0f0f] border-2 border-red-500/50 rounded-xl p-5 shadow-[0_0_15px_rgba(239,68,68,0.15)] flex flex-col justify-between transform transition-all hover:-translate-y-1">
                   <div className="flex justify-between items-start">
-                    <h3 className="text-red-400 font-bold text-sm tracking-wide">Action Required (CS)</h3>
-                    <AlertCircle className="text-red-500 animate-pulse" />
+                    <h3 className="text-red-400 font-bold text-xs md:text-sm tracking-wide">Action Required (CS)</h3>
+                    <AlertCircle className="text-red-500 animate-pulse h-5 w-5" />
                   </div>
                   <div className="mt-4">
-                    <span className="text-3xl md:text-4xl font-black text-white">{executiveMetrics.actionRequired}</span>
-                    <p className="text-xs text-red-400/80 mt-1 font-semibold uppercase tracking-wider">Missing Info / Unresolved</p>
+                    <span className="text-3xl md:text-4xl font-black text-white">{metrics.actionRequired}</span>
+                    <p className="text-[10px] md:text-xs text-red-400/80 mt-1 font-semibold uppercase tracking-wider">Missing Info / Unresolved</p>
                   </div>
                 </div>
 
-                {/* ================= ROW 3: LAST MILE OUTCOMES ================= */}
+                {/* ROW 3: LAST MILE OUTCOMES */}
                 <MetricCard 
                   title="Delivered Today" 
-                  value={executiveMetrics.deliveredToday} 
+                  value={metrics.deliveredToday} 
                   icon={<CheckCircle2 className="text-emerald-500" />}
                 />
                 <MetricCard 
                   title="Rejected by Customer" 
-                  value={executiveMetrics.rejectedToday} 
+                  value={metrics.rejectedToday} 
                   icon={<XCircle className="text-red-500" />}
                 />
                 <MetricCard 
                   title="RTS (Returned to Sender)" 
-                  value={executiveMetrics.rtsToday} 
+                  value={metrics.rtsToday} 
                   icon={<RefreshCcw className="text-orange-500" />}
                 />
+                
                 {/* Success Rate Card with Color Logic */}
-                <div className="bg-[#1F2937] border border-gray-800 rounded-xl p-4 md:p-5 shadow-lg flex flex-col justify-between">
+                <div className="bg-[#1F2937] border border-gray-800 rounded-xl p-5 shadow-lg flex flex-col justify-between transform transition-all hover:-translate-y-1 hover:border-gray-700">
                   <div className="flex justify-between items-start">
-                    <h3 className="text-gray-400 font-bold text-sm tracking-wide">Delivery Success (7-Day)</h3>
-                    <TrendingUp className="text-gray-500" />
+                    <h3 className="text-gray-400 font-bold text-xs md:text-sm tracking-wide">Delivery Success (7-Day)</h3>
+                    <TrendingUp className="text-gray-500 h-5 w-5" />
                   </div>
                   <div className="mt-4">
                     <span className={`text-3xl md:text-4xl font-black ${
-                      executiveMetrics.deliverySuccessRate > 85 ? 'text-emerald-500' : 
-                      executiveMetrics.deliverySuccessRate < 80 ? 'text-red-500' : 'text-yellow-500'
+                      metrics.deliverySuccessRate >= 85 ? 'text-emerald-500' : 
+                      metrics.deliverySuccessRate < 80 ? 'text-red-500' : 'text-yellow-500'
                     }`}>
-                      {executiveMetrics.deliverySuccessRate.toFixed(1)}%
+                      {metrics.deliverySuccessRate.toFixed(1)}%
                     </span>
                   </div>
                 </div>
 
               </div>
 
-              {/* Lighthouse AI kept below the new metrics */}
-              <div className="mt-8">
+              {/* LIGHTHOUSE INSIGHTS */}
+              <div className="mt-10">
                 <div className="flex flex-col md:flex-row md:items-center justify-between mb-4 gap-3">
                   <h3 className="text-lg md:text-xl font-bold text-white flex items-center">
                     <Sparkles className="mr-2 h-5 w-5 text-yellow-500 shrink-0" /> Lighthouse Insights
@@ -478,7 +444,7 @@ export default function App() {
             </div>
           )}
 
-          {/* TAB 2: VPS ENGINE */}
+          {/* ================= TAB 2: VPS ENGINE ================= */}
           {activeTab === 'engine' && (
             <div className="max-w-3xl mx-auto fade-in">
               <h2 className="text-xl md:text-2xl font-bold text-white mb-4 md:mb-6">Fulfillment Engine</h2>
@@ -516,12 +482,11 @@ export default function App() {
                     {isUpdatingCode ? <><RefreshCw className="mr-2 h-4 w-4 animate-spin" /> SENDING...</> : <><Download className="mr-2 h-4 w-4" /> UPDATE CODE</>}
                   </button>
                 </div>
-
               </div>
             </div>
           )}
 
-          {/* TAB 3: SYSTEM ORACLE */}
+          {/* ================= TAB 3: SYSTEM ORACLE ================= */}
           {activeTab === 'oracle' && (
              <div className="flex flex-col h-[calc(100vh-180px)] md:h-[80vh] bg-[#1F2937] border border-gray-800 rounded-xl shadow-xl overflow-hidden fade-in max-w-4xl mx-auto">
                <div className="bg-[#111827] p-3 md:p-4 border-b border-gray-800 flex items-center shrink-0">
@@ -561,7 +526,7 @@ export default function App() {
              </div>
           )}
 
-          {/* TAB 4: TELEMETRY */}
+          {/* ================= TAB 4: TELEMETRY ================= */}
           {activeTab === 'logs' && (
              <div className="h-[calc(100vh-160px)] md:h-[80vh] flex flex-col fade-in max-w-5xl mx-auto">
                <h2 className="text-xl md:text-2xl font-bold text-white mb-4 flex items-center shrink-0">
@@ -587,7 +552,7 @@ export default function App() {
         <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-[#111827] border-t border-gray-800 flex justify-around items-center p-2 z-50 shadow-[0_-4px_10px_rgba(0,0,0,0.3)]">
           <button onClick={() => setActiveTab('analytics')} className={`flex flex-col items-center p-2 rounded-lg transition-colors ${activeTab === 'analytics' ? 'text-emerald-400' : 'text-gray-500 hover:text-gray-300'}`}>
             <Activity className="h-6 w-6 mb-1" />
-            <span className="text-[10px] font-bold">Summary</span>
+            <span className="text-[10px] font-bold">Center</span>
           </button>
           <button onClick={() => setActiveTab('engine')} className={`flex flex-col items-center p-2 rounded-lg transition-colors ${activeTab === 'engine' ? 'text-blue-400' : 'text-gray-500 hover:text-gray-300'}`}>
             <Cpu className="h-6 w-6 mb-1" />
@@ -608,19 +573,20 @@ export default function App() {
   );
 }
 
-// Reusable Standard Metric Card Component (Moved outside the main App component)
+// ---------------------------------------------------------------------------
+// Reusable Sub-Component for the Grid (Lives at the bottom of App.jsx)
+// ---------------------------------------------------------------------------
 function MetricCard({ title, value, icon, trend }) {
   return (
     <div className="bg-[#1F2937] border border-gray-800 rounded-xl p-4 md:p-5 shadow-lg flex flex-col justify-between transform transition-all duration-300 hover:-translate-y-1 hover:border-gray-700">
       <div className="flex justify-between items-start">
         <h3 className="text-gray-400 font-bold text-xs md:text-sm tracking-wide">{title}</h3>
-        {icon}
+        <div className="h-5 w-5 shrink-0">{icon}</div>
       </div>
       
-      <div className="mt-4 flex items-end justify-between">
+      <div className="mt-3 md:mt-4 flex items-end justify-between">
         <span className="text-2xl md:text-3xl font-black text-white">{value}</span>
         
-        {/* Render Trend if provided */}
         {trend !== undefined && (
           <div className={`flex items-center text-xs md:text-sm font-bold ${trend >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
             {trend >= 0 ? <TrendingUp className="w-3 h-3 md:w-4 md:h-4 mr-1" /> : <TrendingDown className="w-3 h-3 md:w-4 md:h-4 mr-1" />}
