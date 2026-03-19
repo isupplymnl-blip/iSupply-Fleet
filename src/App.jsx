@@ -50,17 +50,15 @@ export default function App() {
     setGeminiKey(config.geminiKey || '');
   };
 
-  // 1. Fetch Master Data
+  // 1. Fetch Master Data & AUTO-SYNC ENGINE
   useEffect(() => {
     if (!supabase) return;
 
+    // Heavy Fetch (Runs Once)
     const bootSystem = async () => {
       setIsLoadingData(true);
       const { data: orderData } = await supabase.from('orders').select('*').order('id', { ascending: false }).limit(2000);
       if (orderData) setOrders(orderData);
-
-      const { data: logData } = await supabase.from('cloud_logs').select('*').order('id', { ascending: false }).limit(100);
-      if (logData) setCloudLogs(logData);
 
       const { data: vpsData } = await supabase.from('fleet_command').select('bot_status').eq('id', 1).single();
       if (vpsData) setVpsStatus(vpsData.bot_status);
@@ -70,16 +68,20 @@ export default function App() {
 
     bootSystem();
 
-    const channel = supabase.channel('schema-db-changes')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'cloud_logs' }, (payload) => {
-        setCloudLogs(prev => [payload.new, ...prev].slice(0, 100));
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => {
-        supabase.from('orders').select('*').order('id', { ascending: false }).limit(2000).then(({data}) => { if(data) setOrders(data) });
-      })
-      .subscribe();
+    // Background Telemetry Sync (Runs every 5 seconds silently)
+    const syncLogsAndOrders = async () => {
+      const { data: logData } = await supabase.from('cloud_logs').select('*').order('id', { ascending: false }).limit(50);
+      if (logData) setCloudLogs(logData);
+      
+      // Also silently peek at VPS status in case it changed
+      const { data: vpsData } = await supabase.from('fleet_command').select('bot_status').eq('id', 1).single();
+      if (vpsData) setVpsStatus(vpsData.bot_status);
+    };
+    
+    syncLogsAndOrders(); // Run immediately
+    const syncInterval = setInterval(syncLogsAndOrders, 5000); // Loop every 5s
 
-    return () => { supabase.removeChannel(channel); };
+    return () => clearInterval(syncInterval);
   }, [supabase]);
 
   // Scroll Chat automatically
@@ -136,7 +138,7 @@ export default function App() {
     };
   }, [orders, dateFilter]);
 
-  // 3. VPS Toggle (Restored!)
+  // 3. VPS Controls
   const toggleVPS = async () => {
     if (!supabase) return;
     setIsToggling(true);
@@ -146,36 +148,22 @@ export default function App() {
     setIsToggling(false);
   };
 
-  // Zero-Touch VPS Updater
   const triggerFleetUpdate = async () => {
     if (!supabase) return;
     setIsUpdatingCode(true);
-    
-    const { error } = await supabase
-      .from('fleet_command')
-      .update({ update_requested: true })
-      .eq('id', 1);
-      
-    if (!error) {
-      // Optional: Add a temporary success state here, or just use a clean browser alert
-      alert("☁️ [CMD] ZERO-TOUCH UPDATE signal sent to Fleet Node. It will now pull from GitHub and restart.");
-    } else {
-      alert("❌ Failed to send update command to VPS.");
-    }
-    
+    const { error } = await supabase.from('fleet_command').update({ update_requested: true }).eq('id', 1);
+    if (!error) alert("☁️ [CMD] ZERO-TOUCH UPDATE signal sent to Fleet Node.");
     setIsUpdatingCode(false);
   };
 
-  // 4. Gemini Rest API Helper
+  // 4. Gemini API Helper
   const callGeminiAPI = async (prompt, systemInstruction = null) => {
     if (!geminiKey) throw new Error("API Key Missing");
     const payload = {
       contents: [{ role: "user", parts: [{ text: prompt }] }],
       generationConfig: { temperature: 0.7 }
     };
-    if (systemInstruction) {
-      payload.systemInstruction = { parts: [{ text: systemInstruction }] };
-    }
+    if (systemInstruction) payload.systemInstruction = { parts: [{ text: systemInstruction }] };
     
     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
@@ -185,7 +173,7 @@ export default function App() {
     return data.candidates[0].content.parts[0].text;
   };
 
-  // 5. Lighthouse Engine (Restored!)
+  // 5. Lighthouse Engine
   const generateLighthouseForecast = async () => {
     if (!geminiKey) return setLighthouseText("❌ Missing Gemini API Key in config.");
     setIsLighthouseLoading(true);
@@ -220,25 +208,18 @@ export default function App() {
       }
     });
 
-    const lenses = [
-      "Focus ruthlessly on identifying trapped working capital and accelerating cash conversion cycles.",
-      "Focus purely on courier accountability, transit bottlenecks, and predicting which parcels will fail.",
-      "Act as a strict Loss-Prevention auditor. Focus entirely on stopping RTS bleeding and geo-risk.",
-      "Act as an operational growth strategist. How can we optimize the current successful deliveries to scale faster?"
-    ];
+    const lenses = ["Focus ruthlessly on identifying trapped working capital and accelerating cash conversion cycles.", "Focus purely on courier accountability, transit bottlenecks, and predicting which parcels will fail.", "Act as a strict Loss-Prevention auditor. Focus entirely on stopping RTS bleeding and geo-risk.", "Act as an operational growth strategist. How can we optimize the current successful deliveries to scale faster?"];
     const chosen_lens = lenses[Math.floor(Math.random() * lenses.length)];
     const ai_prompt = `You are an e-commerce financial analyst. Analyze this live data and write 3 actionable insights in Taglish. \nCRITICAL INSTRUCTION: ${chosen_lens}\nData: Delivered: ${total_delivered}. RTS: ${total_rts}. Transit: ${in_transit}. Worst Region: ${worst_region}.`;
 
     try {
       let aiText = await callGeminiAPI(ai_prompt);
       setLighthouseText(`[FORECAST LENS: ${chosen_lens.split('.')[0]}]\n\n${aiText.replace(/\*/g, '')}`);
-    } catch (e) {
-      setLighthouseText(`❌ AI Error: ${e.message}`);
-    }
+    } catch (e) { setLighthouseText(`❌ AI Error: ${e.message}`); }
     setIsLighthouseLoading(false);
   };
 
-  // 6. System Oracle Engine (Restored!)
+  // 6. Oracle Chat Engine
   const handleOracleSubmit = async (e) => {
     e.preventDefault();
     if (!chatInput.trim() || isOracleThinking) return;
@@ -248,34 +229,11 @@ export default function App() {
     setChatHistory(prev => [...prev, { role: 'user', text: userMessage }]);
     setIsOracleThinking(true);
 
-    // Dimension Compression (Hidden Data)
-    let total_orders = orders.length;
-    let rev = dashboardStats.secCodCurr;
-    let rtsCount = orders.filter(o => o.status === 'RTS' || o.status === 'Rejected').length;
-
-    const full_context = `
-    [INVISIBLE BACKGROUND DATA - DO NOT SUMMARIZE OR BRING UP UNLESS SPECIFICALLY ASKED]
-    TOTAL ORDERS: ${total_orders}
-    SECURED REVENUE: P${rev}
-    TOTAL RTS/REJECTED: ${rtsCount}
-    -----------------------------------------------------
-    COO MESSAGE: "${userMessage}"
-    `;
-
-    const systemInstruction = `
-    You are the 'iSupply Omni-Oracle', a high-tier AI Executive Partner to the COO. 
-    You are a fusion of a Data Scientist and a Creative Business Strategist who understands Meta Andromeda algorithms and supply chain theory.
-    CRITICAL CONVERSATIONAL RULES:
-    1. ACT HUMAN: If the COO just says "Hi", reply naturally and casually. 
-    2. DO NOT DUMP DATA UNPROMPTED unless explicitly asked about sales, RTS, or numbers.
-    3. BE CONCISE: Keep answers punchy.
-    COMMANDS: Output [COMMAND: START_FLEET] or [COMMAND: STOP_FLEET] exactly as written if you think the user wants to start or stop the VPS automation bot.
-    `;
+    const full_context = `[INVISIBLE BACKGROUND DATA] TOTAL ORDERS: ${orders.length} SECURED REVENUE: P${dashboardStats.secCodCurr} RTS: ${orders.filter(o => o.status === 'RTS' || o.status === 'Rejected').length}\nCOO MESSAGE: "${userMessage}"`;
+    const systemInstruction = `You are the 'iSupply Omni-Oracle', AI Executive Partner to the COO. Keep answers punchy. COMMANDS: Output [COMMAND: START_FLEET] or [COMMAND: STOP_FLEET] if the user wants to start/stop the VPS bot.`;
 
     try {
       let aiText = await callGeminiAPI(full_context, systemInstruction);
-      
-      // Action Parser
       if (aiText.includes("[COMMAND: START_FLEET]")) {
         await supabase.from('fleet_command').update({ bot_status: 'RUNNING' }).eq('id', 1);
         aiText = aiText.replace("[COMMAND: START_FLEET]", "⚙️ SYSTEM: Fleet Ignited.");
@@ -285,35 +243,36 @@ export default function App() {
         aiText = aiText.replace("[COMMAND: STOP_FLEET]", "⚙️ SYSTEM: Fleet Halted.");
         setVpsStatus('STOPPED');
       }
-
       setChatHistory(prev => [...prev, { role: 'ai', text: aiText }]);
-    } catch (e) {
-      setChatHistory(prev => [...prev, { role: 'ai', text: `❌ Oracle Error: ${e.message}` }]);
-    }
+    } catch (e) { setChatHistory(prev => [...prev, { role: 'ai', text: `❌ Oracle Error: ${e.message}` }]); }
     setIsOracleThinking(false);
   };
 
   if (!isAuthenticated) return <LoginScreen onAuthenticate={handleAuthentication} />;
 
   return (
-    <div className="min-h-screen bg-[#0B0F19] text-gray-100 flex flex-col font-sans">
-      <header className="bg-[#111827] border-b border-gray-800 px-8 py-4 flex justify-between items-center shadow-md z-10">
-        <div className="flex items-center space-x-4">
-          <div className="h-10 w-10 bg-emerald-500/10 border border-emerald-500/20 rounded-lg flex items-center justify-center">
-            <DatabaseZap className="text-emerald-500 h-6 w-6" />
+    <div className="h-screen bg-[#0B0F19] text-gray-100 flex flex-col font-sans overflow-hidden">
+      
+      {/* HEADER - Responsive text size */}
+      <header className="bg-[#111827] border-b border-gray-800 px-4 md:px-8 py-3 md:py-4 flex justify-between items-center shadow-md z-10 shrink-0">
+        <div className="flex items-center space-x-3 md:space-x-4">
+          <div className="h-8 w-8 md:h-10 md:w-10 bg-emerald-500/10 border border-emerald-500/20 rounded-lg flex items-center justify-center">
+            <DatabaseZap className="text-emerald-500 h-5 w-5 md:h-6 md:w-6" />
           </div>
           <div>
-            <h1 className="text-xl font-extrabold text-white tracking-widest">iSUPPLY FLEET COMMAND</h1>
-            <p className="text-emerald-500 font-bold uppercase tracking-wider text-xs flex items-center mt-1">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 mr-2 animate-pulse"></span>
-              {currentWorkspace} // ONLINE
+            <h1 className="text-md md:text-xl font-extrabold text-white tracking-widest leading-tight">FLEET COMMAND</h1>
+            <p className="text-emerald-500 font-bold uppercase tracking-wider text-[10px] md:text-xs flex items-center mt-0.5 md:mt-1">
+              <span className="w-1.5 h-1.5 md:w-2 md:h-2 rounded-full bg-emerald-500 mr-1.5 md:mr-2 animate-pulse"></span>
+              {currentWorkspace}
             </p>
           </div>
         </div>
       </header>
 
-      <div className="flex flex-1 overflow-hidden">
-        <aside className="w-64 bg-[#111827] border-r border-gray-800 flex flex-col pt-6">
+      <div className="flex flex-1 overflow-hidden relative">
+        
+        {/* DESKTOP SIDEBAR - Hidden on mobile */}
+        <aside className="hidden md:flex w-64 bg-[#111827] border-r border-gray-800 flex-col pt-6 shrink-0">
           <nav className="flex-1 px-4 space-y-2">
             <button onClick={() => setActiveTab('analytics')} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg font-bold transition-all ${activeTab === 'analytics' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}><Activity className="h-5 w-5" /> <span>Live Summary</span></button>
             <button onClick={() => setActiveTab('engine')} className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg font-bold transition-all ${activeTab === 'engine' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}><Cpu className="h-5 w-5" /> <span>Fulfillment Engine</span></button>
@@ -322,96 +281,81 @@ export default function App() {
           </nav>
         </aside>
 
-        <main className="flex-1 overflow-y-auto p-8">
+        {/* MAIN CONTENT AREA - Added bottom padding on mobile to make room for bottom nav */}
+        <main className="flex-1 overflow-y-auto p-4 md:p-8 pb-24 md:pb-8 w-full">
           
           {/* TAB 1: ANALYTICS */}
           {activeTab === 'analytics' && (
-            <div className="space-y-6 fade-in">
-              <div className="flex justify-between items-end mb-4">
-                <h2 className="text-2xl font-bold text-white">Store Logistics & Delivery</h2>
-                <div className="flex items-center space-x-2 bg-[#1F2937] border border-gray-700 rounded-lg px-3 py-2">
+            <div className="space-y-6 fade-in max-w-7xl mx-auto">
+              <div className="flex flex-col md:flex-row md:justify-between md:items-end gap-4 mb-4">
+                <h2 className="text-xl md:text-2xl font-bold text-white">Store Logistics</h2>
+                <div className="flex items-center space-x-2 bg-[#1F2937] border border-gray-700 rounded-lg px-3 py-2 w-full md:w-auto">
                   <Calendar className="h-4 w-4 text-gray-400" />
-                  <select value={dateFilter} onChange={(e) => setDateFilter(e.target.value)} className="bg-transparent text-white font-semibold focus:outline-none text-sm cursor-pointer">
+                  <select value={dateFilter} onChange={(e) => setDateFilter(e.target.value)} className="bg-transparent text-white font-semibold focus:outline-none text-sm cursor-pointer w-full">
                     <option value="Today">Today</option><option value="Last 7 Days">Last 7 Days</option><option value="Last 30 Days">Last 30 Days</option><option value="All Time">All Time</option>
                   </select>
                 </div>
               </div>
               
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6">
                 <TripleWhaleCard title="🛍️ TOTAL ORDERS" value={dashboardStats.ordersCurr} trendPct={dashboardStats.ordersTrend} data={dashboardStats.arrOrders} color="#3b82f6" />
                 <TripleWhaleCard title="💰 SECURED CASH" value={`₱${dashboardStats.secCodCurr.toLocaleString()}`} trendPct={dashboardStats.secTrend} data={dashboardStats.arrSec} color="#10b981" />
                 <TripleWhaleCard title="⚠️ LOST COGS (RTS)" value={`₱${dashboardStats.lostCodCurr.toLocaleString()}`} trendPct={dashboardStats.lostTrend} data={dashboardStats.arrLost} color="#ef4444" />
               </div>
-              <p className="text-gray-500 text-sm mt-2 text-right font-bold">🎯 Finalized Delivery Rate: {dashboardStats.rateCurr.toFixed(1)}%</p>
+              <p className="text-gray-500 text-xs md:text-sm mt-2 text-right font-bold">🎯 Finalized Delivery Rate: {dashboardStats.rateCurr.toFixed(1)}%</p>
 
-              {/* LIGHTHOUSE INSIGHTS RESTORED */}
               <div className="mt-8">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-xl font-bold text-white flex items-center">
-                    <Sparkles className="mr-2 h-5 w-5 text-yellow-500" /> Lighthouse Insights
+                <div className="flex flex-col md:flex-row md:items-center justify-between mb-4 gap-3">
+                  <h3 className="text-lg md:text-xl font-bold text-white flex items-center">
+                    <Sparkles className="mr-2 h-5 w-5 text-yellow-500 shrink-0" /> Lighthouse Insights
                   </h3>
-                  <button 
-                    onClick={generateLighthouseForecast} 
-                    disabled={isLighthouseLoading}
-                    className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg font-bold text-sm flex items-center transition-all disabled:opacity-50"
-                  >
-                    {isLighthouseLoading ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> SCANNING...</> : "Generate Financial Forecast"}
+                  <button onClick={generateLighthouseForecast} disabled={isLighthouseLoading} className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-3 md:py-2 rounded-lg font-bold text-sm flex items-center justify-center transition-all disabled:opacity-50 w-full md:w-auto">
+                    {isLighthouseLoading ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> SCANNING...</> : "Generate Forecast"}
                   </button>
                 </div>
-                <div className="bg-[#1F2937] border border-gray-800 rounded-xl p-5 shadow-inner">
-                  <p className="text-gray-300 whitespace-pre-wrap font-mono text-sm leading-relaxed">{lighthouseText}</p>
+                <div className="bg-[#1F2937] border border-gray-800 rounded-xl p-4 md:p-5 shadow-inner">
+                  <p className="text-gray-300 whitespace-pre-wrap font-mono text-xs md:text-sm leading-relaxed overflow-x-auto">{lighthouseText}</p>
                 </div>
               </div>
             </div>
           )}
 
-          {/* TAB 2: VPS ENGINE RESTORED */}
-          {/* TAB 2: VPS ENGINE RESTORED */}
+          {/* TAB 2: VPS ENGINE */}
           {activeTab === 'engine' && (
-            <div className="max-w-3xl fade-in">
-              <h2 className="text-2xl font-bold text-white mb-6">Cloud Fulfillment Engine</h2>
-              <div className="bg-[#1F2937] border border-gray-800 rounded-xl p-8 shadow-xl">
+            <div className="max-w-3xl mx-auto fade-in">
+              <h2 className="text-xl md:text-2xl font-bold text-white mb-4 md:mb-6">Fulfillment Engine</h2>
+              <div className="bg-[#1F2937] border border-gray-800 rounded-xl p-5 md:p-8 shadow-xl">
                 
-                {/* Header */}
-                <div className="flex items-center justify-between mb-8 pb-8 border-b border-gray-800">
+                <div className="flex items-center justify-between mb-6 md:mb-8 pb-6 md:pb-8 border-b border-gray-800">
                   <div>
-                    <h3 className="text-xl font-bold text-white flex items-center">
-                      <Cpu className="mr-3 text-blue-400" /> VPS Automation Node
-                    </h3>
-                    <p className="text-gray-400 mt-2">Controls the headless Python worker deployed on your cloud server. When active, it will continuously scrape Shopify, generate SPX waybills, and dispatch SMS alerts.</p>
+                    <h3 className="text-lg md:text-xl font-bold text-white flex items-center"><Cpu className="mr-3 text-blue-400" /> VPS Worker Node</h3>
+                    <p className="text-gray-400 mt-2 text-xs md:text-sm leading-relaxed">Controls the headless Python worker on your cloud server. Automates Shopify, SPX, and SMS.</p>
                   </div>
                 </div>
 
-                {/* The IGNITE / HALT Button */}
-                <div className="flex items-center justify-between bg-[#111827] p-6 rounded-lg border border-gray-800">
+                <div className="flex flex-col md:flex-row md:items-center justify-between bg-[#111827] p-4 md:p-6 rounded-lg border border-gray-800 gap-4">
                   <div>
-                    <div className="text-sm font-bold text-gray-500 uppercase tracking-widest mb-1">Current State</div>
-                    <div className={`text-2xl font-black ${vpsStatus === 'RUNNING' ? 'text-emerald-500' : 'text-red-500'}`}>{vpsStatus}</div>
+                    <div className="text-xs md:text-sm font-bold text-gray-500 uppercase tracking-widest mb-1">Current State</div>
+                    <div className={`text-xl md:text-2xl font-black ${vpsStatus === 'RUNNING' ? 'text-emerald-500' : 'text-red-500'}`}>{vpsStatus}</div>
                   </div>
                   <button 
                     onClick={toggleVPS} disabled={isToggling || vpsStatus === 'UNKNOWN'}
-                    className={`flex items-center px-8 py-4 rounded-lg font-bold text-white shadow-lg transition-all ${vpsStatus === 'RUNNING' ? 'bg-red-600 hover:bg-red-500 border-red-700' : 'bg-emerald-600 hover:bg-emerald-500 border-emerald-700'} disabled:opacity-50 border`}
+                    className={`flex items-center justify-center px-6 py-4 rounded-lg font-bold text-white shadow-lg transition-all ${vpsStatus === 'RUNNING' ? 'bg-red-600 hover:bg-red-500 border-red-700' : 'bg-emerald-600 hover:bg-emerald-500 border-emerald-700'} disabled:opacity-50 border w-full md:w-auto`}
                   >
-                    {isToggling ? <><RefreshCw className="mr-2 h-5 w-5 animate-spin" /> SENDING COMMAND...</> : vpsStatus === 'RUNNING' ? <><Square className="mr-2 h-5 w-5 fill-current" /> HALT FLEET WORKER</> : <><Play className="mr-2 h-5 w-5 fill-current" /> IGNITE FLEET WORKER</>}
+                    {isToggling ? <><RefreshCw className="mr-2 h-5 w-5 animate-spin" /> SENDING...</> : vpsStatus === 'RUNNING' ? <><Square className="mr-2 h-5 w-5 fill-current" /> HALT FLEET</> : <><Play className="mr-2 h-5 w-5 fill-current" /> IGNITE FLEET</>}
                   </button>
                 </div>
 
-                {/* ZERO-TOUCH UPDATE BUTTON */}
-                <div className="mt-6 pt-6 border-t border-gray-800 flex justify-between items-center">
+                <div className="mt-6 pt-6 border-t border-gray-800 flex flex-col md:flex-row justify-between md:items-center gap-4">
                   <div>
                     <h4 className="text-white font-bold text-sm">Deploy Code Update</h4>
-                    <p className="text-gray-500 text-xs mt-1">Signals the VPS to pull the latest commit from GitHub and reboot.</p>
+                    <p className="text-gray-500 text-xs mt-1">Signals the VPS to pull latest commit & reboot.</p>
                   </div>
                   <button 
-                    onClick={triggerFleetUpdate}
-                    disabled={isUpdatingCode}
-                    className="flex items-center px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-bold text-sm transition-all disabled:opacity-50 shadow-md border border-blue-700"
+                    onClick={triggerFleetUpdate} disabled={isUpdatingCode}
+                    className="flex items-center justify-center px-4 py-3 md:py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-bold text-sm transition-all disabled:opacity-50 w-full md:w-auto"
                   >
-                    {isUpdatingCode ? (
-                      <><RefreshCw className="mr-2 h-4 w-4 animate-spin" /> SENDING...</>
-                    ) : (
-                      <><Download className="mr-2 h-4 w-4" /> UPDATE FLEET CODE</>
-                    )}
+                    {isUpdatingCode ? <><RefreshCw className="mr-2 h-4 w-4 animate-spin" /> SENDING...</> : <><Download className="mr-2 h-4 w-4" /> UPDATE CODE</>}
                   </button>
                 </div>
 
@@ -419,65 +363,59 @@ export default function App() {
             </div>
           )}
 
-          {/* TAB 3: SYSTEM ORACLE (AI CHAT) RESTORED */}
+          {/* TAB 3: SYSTEM ORACLE */}
           {activeTab === 'oracle' && (
-             <div className="flex flex-col h-[80vh] bg-[#1F2937] border border-gray-800 rounded-xl shadow-xl overflow-hidden fade-in">
-               <div className="bg-[#111827] p-4 border-b border-gray-800 flex items-center">
-                 <Bot className="h-6 w-6 text-purple-400 mr-3" />
-                 <h3 className="font-bold text-white">System Oracle (Gemini 2.5)</h3>
+             <div className="flex flex-col h-[calc(100vh-180px)] md:h-[80vh] bg-[#1F2937] border border-gray-800 rounded-xl shadow-xl overflow-hidden fade-in max-w-4xl mx-auto">
+               <div className="bg-[#111827] p-3 md:p-4 border-b border-gray-800 flex items-center shrink-0">
+                 <Bot className="h-5 w-5 md:h-6 md:w-6 text-purple-400 mr-2 md:mr-3" />
+                 <h3 className="font-bold text-white text-sm md:text-base">System Oracle (Gemini 2.5)</h3>
                </div>
                
-               <div className="flex-1 overflow-y-auto p-6 space-y-4">
+               <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4">
                  {chatHistory.map((msg, idx) => (
                    <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                     <div className={`max-w-[80%] p-4 rounded-xl text-sm ${msg.role === 'user' ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-200 border border-gray-700'}`}>
+                     <div className={`max-w-[85%] md:max-w-[80%] p-3 md:p-4 rounded-xl text-xs md:text-sm ${msg.role === 'user' ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-200 border border-gray-700'}`}>
                        {msg.role === 'ai' && <strong className="block mb-1 text-purple-400">Oracle</strong>}
-                       <span className="whitespace-pre-wrap">{msg.text}</span>
+                       <span className="whitespace-pre-wrap leading-relaxed">{msg.text}</span>
                      </div>
                    </div>
                  ))}
                  {isOracleThinking && (
                    <div className="flex justify-start">
-                     <div className="bg-gray-800 text-gray-400 border border-gray-700 p-4 rounded-xl text-sm italic flex items-center">
-                       <Loader2 className="w-4 h-4 mr-2 animate-spin" /> Oracle is analyzing database...
+                     <div className="bg-gray-800 text-gray-400 border border-gray-700 p-3 md:p-4 rounded-xl text-xs md:text-sm italic flex items-center">
+                       <Loader2 className="w-4 h-4 mr-2 animate-spin" /> Analyzing...
                      </div>
                    </div>
                  )}
                  <div ref={chatEndRef} />
                </div>
 
-               <form onSubmit={handleOracleSubmit} className="p-4 bg-[#111827] border-t border-gray-800 flex">
+               <form onSubmit={handleOracleSubmit} className="p-3 md:p-4 bg-[#111827] border-t border-gray-800 flex shrink-0">
                  <input 
-                   type="text" 
-                   value={chatInput} 
-                   onChange={(e) => setChatInput(e.target.value)}
-                   placeholder="Ask me about your current operations or type 'Start Fleet'..."
-                   className="flex-1 bg-gray-800 border border-gray-700 rounded-l-lg px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                   type="text" value={chatInput} onChange={(e) => setChatInput(e.target.value)}
+                   placeholder="Ask me anything..."
+                   className="flex-1 bg-gray-800 border border-gray-700 rounded-l-lg px-3 md:px-4 py-2 md:py-3 text-white focus:outline-none focus:ring-2 focus:ring-purple-500 text-sm"
                  />
-                 <button 
-                   type="submit" 
-                   disabled={isOracleThinking || !chatInput.trim()}
-                   className="bg-purple-600 hover:bg-purple-500 text-white px-6 rounded-r-lg font-bold flex items-center transition-colors disabled:opacity-50"
-                 >
-                   <Send className="w-5 h-5" />
+                 <button type="submit" disabled={isOracleThinking || !chatInput.trim()} className="bg-purple-600 hover:bg-purple-500 text-white px-4 md:px-6 rounded-r-lg font-bold flex items-center transition-colors disabled:opacity-50">
+                   <Send className="w-4 h-4 md:w-5 md:h-5" />
                  </button>
                </form>
              </div>
           )}
 
-          {/* TAB 4: TELEMETRY LOGS */}
+          {/* TAB 4: TELEMETRY */}
           {activeTab === 'logs' && (
-             <div className="h-[80vh] flex flex-col fade-in">
-               <h2 className="text-2xl font-bold text-white mb-6 flex items-center">
-                 <TerminalSquare className="mr-3 text-gray-400" /> Cloud Telemetry Stream
+             <div className="h-[calc(100vh-160px)] md:h-[80vh] flex flex-col fade-in max-w-5xl mx-auto">
+               <h2 className="text-xl md:text-2xl font-bold text-white mb-4 flex items-center shrink-0">
+                 <TerminalSquare className="mr-3 text-gray-400" /> Live Telemetry Stream
                </h2>
-               <div className="flex-1 bg-[#111827] border border-gray-800 rounded-xl p-6 font-mono text-sm overflow-y-auto shadow-inner">
+               <div className="flex-1 bg-[#111827] border border-gray-800 rounded-xl p-4 md:p-6 font-mono text-xs md:text-sm overflow-y-auto shadow-inner">
                  {cloudLogs.length === 0 ? (
                    <div className="text-gray-600 flex items-center"><Loader2 className="w-4 h-4 mr-2 animate-spin"/> Monitoring for events...</div>
                  ) : (
                    cloudLogs.map((log) => (
-                     <div key={log.id} className={`mb-2 pb-2 border-b border-gray-800/50 ${log.message.includes('❌') || log.message.includes('ERROR') ? 'text-red-400' : 'text-gray-300'}`}>
-                       <span className="text-gray-600 mr-3">[{new Date(log.created_at).toLocaleTimeString()}]</span>
+                     <div key={log.id} className={`mb-2 pb-2 border-b border-gray-800/50 break-words ${log.message.includes('❌') || log.message.includes('ERROR') ? 'text-red-400' : 'text-gray-300'}`}>
+                       <span className="text-gray-600 mr-2 block md:inline md:mr-3">[{new Date(log.created_at).toLocaleTimeString()}]</span>
                        {log.message}
                      </div>
                    ))
@@ -485,8 +423,28 @@ export default function App() {
                </div>
              </div>
           )}
-
         </main>
+
+        {/* MOBILE BOTTOM NAVIGATION - Hidden on Desktop */}
+        <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-[#111827] border-t border-gray-800 flex justify-around items-center p-2 z-50 shadow-[0_-4px_10px_rgba(0,0,0,0.3)]">
+          <button onClick={() => setActiveTab('analytics')} className={`flex flex-col items-center p-2 rounded-lg transition-colors ${activeTab === 'analytics' ? 'text-emerald-400' : 'text-gray-500 hover:text-gray-300'}`}>
+            <Activity className="h-6 w-6 mb-1" />
+            <span className="text-[10px] font-bold">Summary</span>
+          </button>
+          <button onClick={() => setActiveTab('engine')} className={`flex flex-col items-center p-2 rounded-lg transition-colors ${activeTab === 'engine' ? 'text-blue-400' : 'text-gray-500 hover:text-gray-300'}`}>
+            <Cpu className="h-6 w-6 mb-1" />
+            <span className="text-[10px] font-bold">Engine</span>
+          </button>
+          <button onClick={() => setActiveTab('oracle')} className={`flex flex-col items-center p-2 rounded-lg transition-colors ${activeTab === 'oracle' ? 'text-purple-400' : 'text-gray-500 hover:text-gray-300'}`}>
+            <Bot className="h-6 w-6 mb-1" />
+            <span className="text-[10px] font-bold">Oracle</span>
+          </button>
+          <button onClick={() => setActiveTab('logs')} className={`flex flex-col items-center p-2 rounded-lg transition-colors ${activeTab === 'logs' ? 'text-gray-200' : 'text-gray-500 hover:text-gray-300'}`}>
+            <TerminalSquare className="h-6 w-6 mb-1" />
+            <span className="text-[10px] font-bold">Logs</span>
+          </button>
+        </nav>
+
       </div>
     </div>
   );
