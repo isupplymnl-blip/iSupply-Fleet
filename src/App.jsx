@@ -107,22 +107,28 @@ export default function App() {
 
     const syncLogsAndOrders = async () => {
       // 1. Fetch Logs
-      const { data: logData } = await supabase.from('cloud_logs').select('*').order('id', { ascending: false }).limit(50);
+      const { data: logData } = await supabase.from('cloud_logs').select('*').order('created_at', { ascending: false }).limit(50);
       if (logData) setCloudLogs(logData);
       
       // 2. Fetch Fleet Data
       await fetchFleetData();
 
-      // 3. ✅ FETCH LIVE ORDERS (This is what was missing!)
-      // Grabs the 200 most recent orders every 5 seconds to keep the dashboard perfectly in sync.
-      const { data: liveOrders } = await supabase.from('orders').select('*').order('id', { ascending: false }).limit(200);
+      // 3. ✅ FETCH LIVE ORDERS (Fixed mapping logic)
+      // Order by created_at to ensure we get the absolute newest rows
+      const { data: liveOrders } = await supabase.from('orders').select('*').order('created_at', { ascending: false }).limit(200);
       
       if (liveOrders) {
         setOrders(prevOrders => {
-          // Smart Merge: Updates existing orders and adds new ones without causing the screen to flicker!
-          const existingMap = new Map(prevOrders.map(o => [o.id, o]));
-          liveOrders.forEach(o => existingMap.set(o.id, o));
-          return Array.from(existingMap.values());
+          // Merge using order_number so React knows exactly which order is which!
+          const existingMap = new Map(prevOrders.map(o => [o.order_number, o]));
+          liveOrders.forEach(o => existingMap.set(o.order_number, o));
+          
+          // Sort them from newest to oldest mathematically
+          return Array.from(existingMap.values()).sort((a, b) => {
+            const numA = parseInt(a.order_number?.replace(/\D/g, '') || 0);
+            const numB = parseInt(b.order_number?.replace(/\D/g, '') || 0);
+            return numB - numA;
+          });
         });
       }
     };
@@ -320,15 +326,23 @@ export default function App() {
   // ✅ STEP 2 POSTED HERE:
   const handleManualDeliver = async (orderId, orderNumber) => {
     if (!supabase) return;
-    setResolvingId(orderId);
+    setResolvingId(orderNumber); // Changed to orderNumber
+    
     try {
-      await supabase.from('orders').update({ status: 'Delivered' }).eq('id', orderId);
+      // ✅ FIX: Tell Supabase to search by 'order_number' instead of 'id'
+      await supabase.from('orders').update({ status: 'Delivered' }).eq('order_number', orderNumber);
+      
       const timeStr = new Date().toLocaleTimeString('en-US', { timeZone: 'Asia/Manila' });
       await supabase.from('cloud_logs').insert({ 
         message: `[${timeStr}] [MANUAL] 🟢 Order ${orderNumber} marked as Delivered via Dashboard.` 
       });
-      setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: 'Delivered' } : o));
-    } catch (error) { console.error("Failed to update order:", error); }
+
+      // Instantly update the UI
+      setOrders(prev => prev.map(o => o.order_number === orderNumber ? { ...o, status: 'Delivered' } : o));
+      
+    } catch (error) {
+      console.error("Failed to update order:", error);
+    }
     setResolvingId(null);
   };
 
@@ -586,10 +600,10 @@ export default function App() {
                         </div>
                         <button 
                           onClick={() => handleManualDeliver(order.id, order.order_number)}
-                          disabled={resolvingId === order.id}
+                          disabled={resolvingId === order.order_number}
                           className="bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-400 border border-emerald-500/30 px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center disabled:opacity-50"
                         >
-                          {resolvingId === order.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <><CheckCircle2 className="w-4 h-4 mr-1.5" /> DELIVER</>}
+                          {resolvingId === order.order_number ? <Loader2 className="w-4 h-4 animate-spin" /> : <><CheckCircle2 className="w-4 h-4 mr-1.5" /> DELIVER</>}
                         </button>
                       </div>
                   ))}
