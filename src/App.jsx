@@ -41,6 +41,10 @@ export default function App() {
   const [isOracleThinking, setIsOracleThinking] = useState(false);
   const chatEndRef = useRef(null);
 
+  // ✅ ADD THESE TWO NEW STATES FOR THE MANUAL RESOLUTION CENTER:
+  const [manualSearch, setManualSearch] = useState('');
+  const [resolvingId, setResolvingId] = useState(null);
+
   // --- AUTO-LOGIN CHECKER ---
   useEffect(() => {
     const savedWorkspace = localStorage.getItem('isupply_fleet_workspace');
@@ -102,9 +106,24 @@ export default function App() {
     bootSystem();
 
     const syncLogsAndOrders = async () => {
+      // 1. Fetch Logs
       const { data: logData } = await supabase.from('cloud_logs').select('*').order('id', { ascending: false }).limit(50);
       if (logData) setCloudLogs(logData);
+      
+      // 2. Fetch Fleet Data
       await fetchFleetData();
+      
+      // 3. ✅ ADD THIS: Re-fetch recent orders to keep the math engine LIVE
+      // We limit to 500 here for speed, assuming you don't process 500+ a day.
+      const { data: liveOrders } = await supabase.from('orders').select('*').order('id', { ascending: false }).limit(500);
+      if (liveOrders) {
+        setOrders(prevOrders => {
+          // Merge live updates into existing state to prevent UI flickering
+          const existingMap = new Map(prevOrders.map(o => [o.id, o]));
+          liveOrders.forEach(o => existingMap.set(o.id, o));
+          return Array.from(existingMap.values()).sort((a, b) => b.id - a.id);
+        });
+      }
     };
     
     syncLogsAndOrders(); 
@@ -210,8 +229,15 @@ export default function App() {
     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
     });
+    
     const data = await response.json();
     if (data.error) throw new Error(data.error.message);
+    
+    // ✅ ADD THIS: Safe extraction
+    if (!data.candidates || data.candidates.length === 0 || !data.candidates[0].content) {
+       throw new Error("AI responded with an empty or blocked message.");
+    }
+    
     return data.candidates[0].content.parts[0].text;
   };
 
@@ -288,6 +314,21 @@ export default function App() {
       setChatHistory(prev => [...prev, { role: 'ai', text: aiText }]);
     } catch (e) { setChatHistory(prev => [...prev, { role: 'ai', text: `❌ Oracle Error: ${e.message}` }]); }
     setIsOracleThinking(false);
+  };
+
+  // ✅ STEP 2 POSTED HERE:
+  const handleManualDeliver = async (orderId, orderNumber) => {
+    if (!supabase) return;
+    setResolvingId(orderId);
+    try {
+      await supabase.from('orders').update({ status: 'Delivered' }).eq('id', orderId);
+      const timeStr = new Date().toLocaleTimeString('en-US', { timeZone: 'Asia/Manila' });
+      await supabase.from('cloud_logs').insert({ 
+        message: `[${timeStr}] [MANUAL] 🟢 Order ${orderNumber} marked as Delivered via Dashboard.` 
+      });
+      setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: 'Delivered' } : o));
+    } catch (error) { console.error("Failed to update order:", error); }
+    setResolvingId(null);
   };
 
   if (!isAuthenticated) return <LoginScreen onAuthenticate={handleAuthentication} />;
@@ -489,6 +530,76 @@ export default function App() {
                   </button>
                 </div>
               </div>
+
+              {/* ✅ STEP 3 POSTED HERE: MANUAL RESOLUTION CENTER */}
+              <div className="bg-[#1F2937] border border-gray-800 rounded-xl p-5 md:p-8 shadow-xl mt-6">
+                <div className="flex items-center justify-between mb-4 md:mb-6 pb-4 border-b border-gray-800">
+                  <div>
+                    <h3 className="text-lg md:text-xl font-bold text-white flex items-center">
+                      <Package className="mr-3 text-yellow-500" /> Manual Resolution Center
+                    </h3>
+                    <p className="text-gray-400 mt-2 text-xs md:text-sm">
+                      Force-close non-SPX orders (Lalamove, J&T) by marking them as Delivered.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mb-4">
+                  <input 
+                    type="text" 
+                    placeholder="🔍 Search by Order # or Name..." 
+                    value={manualSearch}
+                    onChange={(e) => setManualSearch(e.target.value)}
+                    className="w-full bg-[#111827] border border-gray-700 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-yellow-500 transition-colors text-sm"
+                  />
+                </div>
+
+                <div className="max-h-64 overflow-y-auto space-y-2 pr-2 custom-scrollbar">
+                  {orders
+                    .filter(o => 
+                      o.status !== 'Delivered' && 
+                      o.status !== 'Returned' && 
+                      o.status !== 'RTS' &&
+                      o.status !== 'Rejected' &&
+                      (o.tracking_number === 'N/A' || !o.tracking_number?.includes('SPEPH'))
+                    )
+                    .filter(o => 
+                      manualSearch === '' || 
+                      (o.order_number && o.order_number.toLowerCase().includes(manualSearch.toLowerCase())) || 
+                      (o.first_name && o.first_name.toLowerCase().includes(manualSearch.toLowerCase()))
+                    )
+                    .map(order => (
+                      <div key={order.id} className="bg-[#111827] border border-gray-800 rounded-lg p-3 flex justify-between items-center hover:border-gray-700 transition-all">
+                        <div>
+                          <div className="flex items-center space-x-2">
+                            <span className="font-bold text-white text-sm">{order.order_number}</span>
+                            <span className="text-xs px-2 py-0.5 rounded-full bg-gray-800 text-gray-300 border border-gray-700">
+                              {order.first_name} {order.last_name}
+                            </span>
+                          </div>
+                          <div className="text-xs text-yellow-500/80 font-semibold mt-1">
+                            {order.status}
+                          </div>
+                        </div>
+                        <button 
+                          onClick={() => handleManualDeliver(order.id, order.order_number)}
+                          disabled={resolvingId === order.id}
+                          className="bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-400 border border-emerald-500/30 px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center disabled:opacity-50"
+                        >
+                          {resolvingId === order.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <><CheckCircle2 className="w-4 h-4 mr-1.5" /> DELIVER</>}
+                        </button>
+                      </div>
+                  ))}
+                  
+                  {orders.filter(o => o.status !== 'Delivered' && o.status !== 'Returned' && o.status !== 'RTS' && o.status !== 'Rejected' && (o.tracking_number === 'N/A' || !o.tracking_number?.includes('SPEPH'))).length === 0 && (
+                    <div className="text-center py-6 text-gray-500 text-sm">
+                      🎉 No manual orders left to resolve!
+                    </div>
+                  )}
+                </div>
+              </div>
+              {/* ✅ END OF MANUAL RESOLUTION CENTER */}
+
             </div>
           )}
 
