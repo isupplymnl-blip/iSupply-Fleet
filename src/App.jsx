@@ -112,16 +112,17 @@ export default function App() {
       
       // 2. Fetch Fleet Data
       await fetchFleetData();
+
+      // 3. ✅ FETCH LIVE ORDERS (This is what was missing!)
+      // Grabs the 200 most recent orders every 5 seconds to keep the dashboard perfectly in sync.
+      const { data: liveOrders } = await supabase.from('orders').select('*').order('id', { ascending: false }).limit(200);
       
-      // 3. ✅ ADD THIS: Re-fetch recent orders to keep the math engine LIVE
-      // We limit to 500 here for speed, assuming you don't process 500+ a day.
-      const { data: liveOrders } = await supabase.from('orders').select('*').order('id', { ascending: false }).limit(500);
       if (liveOrders) {
         setOrders(prevOrders => {
-          // Merge live updates into existing state to prevent UI flickering
+          // Smart Merge: Updates existing orders and adds new ones without causing the screen to flicker!
           const existingMap = new Map(prevOrders.map(o => [o.id, o]));
           liveOrders.forEach(o => existingMap.set(o.id, o));
-          return Array.from(existingMap.values()).sort((a, b) => b.id - a.id);
+          return Array.from(existingMap.values());
         });
       }
     };
@@ -568,6 +569,8 @@ export default function App() {
                       (o.order_number && o.order_number.toLowerCase().includes(manualSearch.toLowerCase())) || 
                       (o.first_name && o.first_name.toLowerCase().includes(manualSearch.toLowerCase()))
                     )
+                    // ✅ ADD THIS ONE LINE RIGHT HERE:
+                    .sort((a, b) => parseInt(b.order_number?.replace(/\D/g, '') || 0) - parseInt(a.order_number?.replace(/\D/g, '') || 0))
                     .map(order => (
                       <div key={order.id} className="bg-[#111827] border border-gray-800 rounded-lg p-3 flex justify-between items-center hover:border-gray-700 transition-all">
                         <div>
