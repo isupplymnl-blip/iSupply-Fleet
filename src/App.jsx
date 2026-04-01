@@ -74,17 +74,24 @@ export default function App() {
     setSupabase(null);
   };
 
-  // 1. Fetch Master Data & AUTO-SYNC ENGINE (UPDATED FOR NEW COLUMNS)
+  // 1. Fetch Master Data & INSTANT REALTIME ENGINE (Zero Disk I/O)
   useEffect(() => {
     if (!supabase) return;
 
-    const fetchFleetData = async () => {
-      const { data: vpsData } = await supabase
-        .from('fleet_command')
-        .select('bot_status, daily_shopify_kpi, daily_shopify_sales, daily_shopify_cancelled')
-        .eq('id', 1)
-        .single();
+    // --- A. INITIAL LOAD (Runs exactly ONCE when you open the page) ---
+    const bootSystem = async () => {
+      setIsLoadingData(true);
       
+      // Load recent orders
+      const { data: orderData } = await supabase.from('orders').select('*').order('id', { ascending: false }).limit(3000);
+      if (orderData) setOrders(orderData);
+
+      // Load recent logs
+      const { data: logData } = await supabase.from('cloud_logs').select('*').order('created_at', { ascending: false }).limit(50);
+      if (logData) setCloudLogs(logData);
+
+      // Load fleet settings
+      const { data: vpsData } = await supabase.from('fleet_command').select('*').eq('id', 1).single();
       if (vpsData) {
         setVpsStatus(vpsData.bot_status);
         setShopifyStats({
@@ -93,55 +100,61 @@ export default function App() {
           cancelled: vpsData.daily_shopify_cancelled || 0
         });
       }
-    };
-
-    const bootSystem = async () => {
-      setIsLoadingData(true);
-      const { data: orderData } = await supabase.from('orders').select('*').order('id', { ascending: false }).limit(3000);
-      if (orderData) setOrders(orderData);
-      await fetchFleetData();
       setIsLoadingData(false);
     };
 
     bootSystem();
 
-    const syncLogsAndOrders = async () => {
-      // 1. Fetch Logs (Reduced from 50 to 15 to save database bandwidth)
-      const { data: logData } = await supabase.from('cloud_logs').select('*').order('created_at', { ascending: false }).limit(15);
-      if (logData) setCloudLogs(logData);
+    // --- B. SUPABASE REALTIME WEBSOCKETS (Instant UI, 0 Disk I/O) ---
+    const realtimeChannel = supabase.channel('isupply_live_feed')
       
-      // 2. Fetch Fleet Data
-      await fetchFleetData();
-
-      // 3. ✅ FETCH ONLY ACTIVE ORDERS (Saves 99% of Disk I/O)
-      // Instead of downloading 200 rows, we ONLY download orders that need your attention.
-      const { data: liveOrders } = await supabase
-        .from('orders')
-        .select('*')
-        .neq('status', 'Delivered')
-        .neq('status', 'Returned')
-        .neq('status', 'RTS')
-        .neq('status', 'Rejected');
-      
-      if (liveOrders) {
-        setOrders(prevOrders => {
-          const existingMap = new Map(prevOrders.map(o => [o.order_number, o]));
-          liveOrders.forEach(o => existingMap.set(o.order_number, o));
-          
-          return Array.from(existingMap.values()).sort((a, b) => {
-            const numA = parseInt(a.order_number?.replace(/\D/g, '') || 0);
-            const numB = parseInt(b.order_number?.replace(/\D/g, '') || 0);
-            return numB - numA;
+      // 1. Listen for Live ORDER Updates & Inserts
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) => {
+        if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+          const newOrder = payload.new;
+          setOrders(prev => {
+            const existingMap = new Map(prev.map(o => [o.order_number, o]));
+            existingMap.set(newOrder.order_number, newOrder); // Add or Update
+            
+            // Keep it mathematically sorted
+            return Array.from(existingMap.values()).sort((a, b) => {
+              const numA = parseInt(a.order_number?.replace(/\D/g, '') || 0);
+              const numB = parseInt(b.order_number?.replace(/\D/g, '') || 0);
+              return numB - numA;
+            });
           });
-        });
-      }
+        }
+        // If you delete an order from the database, instantly remove it from the dashboard
+        if (payload.eventType === 'DELETE') {
+          setOrders(prev => prev.filter(o => o.id !== payload.old.id));
+        }
+      })
+
+      // 2. Listen for Live CLOUD LOGS (Watchdog/Worker console logs)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'cloud_logs' }, (payload) => {
+        const newLog = payload.new;
+        // Add new log to the top, keep only the latest 50 to prevent lag
+        setCloudLogs(prev => [newLog, ...prev].slice(0, 50));
+      })
+
+      // 3. Listen for Live FLEET COMMAND Updates (Shopify stats, Start/Stop)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'fleet_command' }, (payload) => {
+        const newData = payload.new;
+        if (newData.id === 1) {
+          setVpsStatus(newData.bot_status);
+          setShopifyStats({
+            totalOrders: newData.daily_shopify_kpi || 0,
+            totalSales: newData.daily_shopify_sales || 0,
+            cancelled: newData.daily_shopify_cancelled || 0
+          });
+        }
+      })
+      .subscribe();
+
+    // --- C. CLEANUP (Closes the WebSocket if you close the browser tab) ---
+    return () => {
+      supabase.removeChannel(realtimeChannel);
     };
-    
-    syncLogsAndOrders(); 
-    
-    // ✅ CHANGED: Poll every 30 seconds (30000ms) instead of every 5 seconds (5000ms)
-    const syncInterval = setInterval(syncLogsAndOrders, 30000); 
-    return () => clearInterval(syncInterval);
   }, [supabase]);
 
   useEffect(() => {
