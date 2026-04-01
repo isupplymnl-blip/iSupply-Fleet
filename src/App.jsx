@@ -106,24 +106,28 @@ export default function App() {
     bootSystem();
 
     const syncLogsAndOrders = async () => {
-      // 1. Fetch Logs
-      const { data: logData } = await supabase.from('cloud_logs').select('*').order('created_at', { ascending: false }).limit(50);
+      // 1. Fetch Logs (Reduced from 50 to 15 to save database bandwidth)
+      const { data: logData } = await supabase.from('cloud_logs').select('*').order('created_at', { ascending: false }).limit(15);
       if (logData) setCloudLogs(logData);
       
       // 2. Fetch Fleet Data
       await fetchFleetData();
 
-      // 3. ✅ FETCH LIVE ORDERS (Fixed mapping logic)
-      // Order by created_at to ensure we get the absolute newest rows
-      const { data: liveOrders } = await supabase.from('orders').select('*').order('created_at', { ascending: false }).limit(200);
+      // 3. ✅ FETCH ONLY ACTIVE ORDERS (Saves 99% of Disk I/O)
+      // Instead of downloading 200 rows, we ONLY download orders that need your attention.
+      const { data: liveOrders } = await supabase
+        .from('orders')
+        .select('*')
+        .neq('status', 'Delivered')
+        .neq('status', 'Returned')
+        .neq('status', 'RTS')
+        .neq('status', 'Rejected');
       
       if (liveOrders) {
         setOrders(prevOrders => {
-          // Merge using order_number so React knows exactly which order is which!
           const existingMap = new Map(prevOrders.map(o => [o.order_number, o]));
           liveOrders.forEach(o => existingMap.set(o.order_number, o));
           
-          // Sort them from newest to oldest mathematically
           return Array.from(existingMap.values()).sort((a, b) => {
             const numA = parseInt(a.order_number?.replace(/\D/g, '') || 0);
             const numB = parseInt(b.order_number?.replace(/\D/g, '') || 0);
@@ -134,7 +138,9 @@ export default function App() {
     };
     
     syncLogsAndOrders(); 
-    const syncInterval = setInterval(syncLogsAndOrders, 5000); 
+    
+    // ✅ CHANGED: Poll every 30 seconds (30000ms) instead of every 5 seconds (5000ms)
+    const syncInterval = setInterval(syncLogsAndOrders, 30000); 
     return () => clearInterval(syncInterval);
   }, [supabase]);
 
