@@ -82,8 +82,8 @@ export default function App() {
     const bootSystem = async () => {
       setIsLoadingData(true);
       
-      // Load recent orders
-      const { data: orderData } = await supabase.from('orders').select('*').order('id', { ascending: false }).limit(3000);
+      // ✅ FIX: Reduced from 3000 to 800 to prevent database crashing on load
+      const { data: orderData } = await supabase.from('orders').select('*').order('created_at', { ascending: false }).limit(800);
       if (orderData) setOrders(orderData);
 
       // Load recent logs
